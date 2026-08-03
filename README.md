@@ -1,6 +1,14 @@
 # vault-mcp
 
+[![CI](https://github.com/julianosirtori/vault-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/julianosirtori/vault-mcp/actions/workflows/ci.yml)
+[![Status: WIP](https://img.shields.io/badge/status-WIP-orange.svg)](#)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+
+> [!WARNING]
+> **Work in progress.** The security model and core workflows are implemented
+> and tested, but the project has not reached a stable release. Expect breaking
+> configuration changes, review the threat model before deployment, and do not
+> treat the current `main` branch as production-ready yet.
 
 A **remote MCP server for your Obsidian vault**. Add it once as a connector in
 Claude's settings and your notes become available in any conversation — on
