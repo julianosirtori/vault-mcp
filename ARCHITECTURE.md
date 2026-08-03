@@ -158,6 +158,38 @@ se uma nota maliciosa conseguir chamar isto com os argumentos que quiser?*
 | `create_note` | escrita | Cria nota nova; falha se já existir |
 | `append_to_note` | escrita | Acrescenta ao final; nunca sobrescreve |
 
+### Versão 0.2
+
+Adições motivadas por uso real (o MCP inicial era, na prática, write-only-append
+e caro em chamadas para perguntas sobre tarefas):
+
+| Tool | Tipo | Descrição |
+| --- | --- | --- |
+| `read_notes` | leitura | Lote de até 10 notas; erro de uma não derruba as outras |
+| `get_vault_tree` | leitura | Pastas com contagem de notas; estrutura, nunca conteúdo |
+| `create_daily_note` | escrita | Cria a nota diária aplicando o template configurado; idempotente |
+| `append_to_section` | escrita | Insere no fim da seção de um heading, não no fim do arquivo |
+| `edit_note` | escrita | Search-and-replace exato, match único obrigatório, atômico |
+| `move_note` | escrita | Move/renomeia; nunca sobrescreve o destino |
+| `delete_note` | escrita | Move para `.trash/` do vault; nada é apagado de verdade |
+| `list_tasks` | leitura | Tarefas no formato do plugin Tasks, com filtros de status/prazo/pasta |
+| `complete_task` | escrita | Marca `[x]` e grava `✅ YYYY-MM-DD` no formato do plugin |
+| `postpone_task` | escrita | Troca ou define a data `📅` no formato do plugin |
+
+Duas decisões transversais da 0.2:
+
+- **Versionamento otimista.** Toda leitura devolve um hash curto do conteúdo
+  (`version`), e toda escrita de edição aceita `expected_hash`; operações por
+  número de linha exigem esse hash. A versão é conferida antes de preparar a
+  alteração e novamente imediatamente antes do rename atômico. Mudanças já
+  observáveis falham com `CONFLICT`; ainda existe uma janela residual estreita
+  contra processos externos, pois o filesystem não oferece CAS portátil por
+  conteúdo.
+- **Busca paginável.** `search_notes` ganhou `offset`, `path_prefix`, `tag` e
+  `sort_by: mtime`, e informa quando há mais resultados além do limite. Regex
+  continua fora de propósito: query de busca é entrada não confiável e nunca é
+  interpretada como expressão regular (ReDoS).
+
 #### Nota sobre `get_daily_note`
 
 É a tool com mais decisão de produto embutida, porque a "nota de hoje" não é um
@@ -173,27 +205,41 @@ Três definições que precisam ser explícitas:
 - **Não cria a nota se ela não existir.** Retorna o caminho que a nota teria e
   sinaliza a ausência. Criar como efeito colateral de uma leitura é
   surpreendente, e a criação real esbarra no problema seguinte.
-- **Não aplica template.** O template do usuário provavelmente contém sintaxe de
-  plugin, que só o runtime do Obsidian resolve. Uma nota diária criada por fora
-  nasce sem a estrutura esperada, e isso precisa estar documentado — é a
-  diferença mais visível entre criar pelo app e criar pelo servidor.
+- **Não cria com template por leitura, mas `create_daily_note` aplica.** A
+  criação é uma tool separada e explícita, que lê o template configurado (core
+  Daily Notes ou Periodic Notes) e resolve os placeholders `{{title}}`,
+  `{{date}}`, `{{time}}` e `{{date:FORMAT}}`. Sintaxe de outros plugins
+  (Templater etc.) não é executada — fica literal na nota, visível em vez de
+  silenciosamente perdida.
 
-O par natural de uso é `get_daily_note` seguido de `append_to_note` com o caminho
-retornado, o que mantém a escrita concentrada numa tool só.
+A configuração é lida de `.obsidian/daily-notes.json` e, na ausência dela, da
+seção `daily` de `.obsidian/plugins/periodic-notes/data.json` — muitos vaults
+configuram só o Periodic Notes, e ignorá-lo resolvia a nota diária para a raiz
+do vault com o formato padrão.
+
+O par natural de uso é `get_daily_note` seguido de `append_to_section` (ou
+`append_to_note`) com o caminho retornado.
 
 ### Deliberadamente ausentes
 
-- **`delete_note` e `move_note`** — transformam ruído em perda de dados. Mover
-  também quebra wikilinks, e a quebra se propaga pelo sync para todos os
-  dispositivos.
 - **Qualquer tool de requisição HTTP** — é o que transforma "lixo numa nota" em
   exfiltração de conteúdo.
 - **Execução de shell ou JavaScript** — sem exceções.
+- **Deleção permanente.** `delete_note` existe, mas é um move para `.trash/` do
+  próprio vault — o mesmo destino do "move to vault trash" do Obsidian. Uma
+  nota maliciosa que consiga induzir uma deleção produz um incidente
+  recuperável, não perda de dados.
+
+`move_note` entrou com a mesma lógica: nunca sobrescreve o destino, e a quebra
+de wikilinks é declarada na resposta da tool (reescrever links dos vizinhos
+continua fora — editar N arquivos como efeito colateral de um rename é
+exatamente o tipo de blast radius que a superfície evita).
 
 ### Candidatas para depois
 
 `list_tags`, `get_backlinks`, `update_frontmatter` com montagem programática do
-YAML. Cada uma entra apenas após passar pela pergunta acima.
+YAML. Cada uma entra apenas após passar pela pergunta acima. (`edit_note` já
+cobre correções pontuais de frontmatter sem parser YAML.)
 
 ---
 

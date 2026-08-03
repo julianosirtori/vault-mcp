@@ -1,9 +1,9 @@
 import * as path from 'node:path';
 import { promises as fs } from 'node:fs';
-import type { DailyNoteInfo, Vault } from './types.js';
+import type { CreateDailyResult, DailyNoteInfo, Vault } from './types.js';
 import { VaultError } from './errors.js';
 import { resolveNotePath } from './paths.js';
-import { readNote } from './io.js';
+import { createNote, readNote } from './io.js';
 
 const MONTHS = [
   'January',
@@ -32,6 +32,19 @@ const WEEKDAYS = [
 
 // Longest-first within each letter family so e.g. YYYY wins over YY.
 const TOKENS = ['YYYY', 'YY', 'MMMM', 'MMM', 'MM', 'M', 'dddd', 'ddd', 'DD', 'D'] as const;
+const TEMPLATE_TIME_TOKENS = [
+  ...TOKENS,
+  'HH',
+  'H',
+  'hh',
+  'h',
+  'mm',
+  'm',
+  'ss',
+  's',
+  'A',
+  'a',
+] as const;
 
 function pad(n: number, width: number): string {
   return String(n).padStart(width, '0');
@@ -64,11 +77,40 @@ function renderToken(token: string, date: Date): string {
   }
 }
 
-/**
- * Moment-subset formatter: YYYY YY MMMM MMM MM M DD D dddd ddd, with
- * [literal] bracket escapes. en-US names. Unknown characters pass through.
- */
-export function formatDailyName(format: string, date: Date): string {
+function renderTemplateTimeToken(token: string, date: Date): string {
+  const hours = date.getHours();
+  switch (token) {
+    case 'HH':
+      return pad(hours, 2);
+    case 'H':
+      return String(hours);
+    case 'hh':
+      return pad(hours % 12 || 12, 2);
+    case 'h':
+      return String(hours % 12 || 12);
+    case 'mm':
+      return pad(date.getMinutes(), 2);
+    case 'm':
+      return String(date.getMinutes());
+    case 'ss':
+      return pad(date.getSeconds(), 2);
+    case 's':
+      return String(date.getSeconds());
+    case 'A':
+      return hours < 12 ? 'AM' : 'PM';
+    case 'a':
+      return hours < 12 ? 'am' : 'pm';
+    default:
+      return renderToken(token, date);
+  }
+}
+
+function formatTokens(
+  format: string,
+  date: Date,
+  tokens: readonly string[],
+  render: (token: string, date: Date) => string,
+): string {
   let out = '';
   let i = 0;
   while (i < format.length) {
@@ -83,9 +125,9 @@ export function formatDailyName(format: string, date: Date): string {
       i = close + 1;
       continue;
     }
-    const token = TOKENS.find((t) => format.startsWith(t, i));
+    const token = tokens.find((candidate) => format.startsWith(candidate, i));
     if (token !== undefined) {
-      out += renderToken(token, date);
+      out += render(token, date);
       i += token.length;
     } else {
       out += ch;
@@ -95,43 +137,90 @@ export function formatDailyName(format: string, date: Date): string {
   return out;
 }
 
+/**
+ * Moment-subset formatter: YYYY YY MMMM MMM MM M DD D dddd ddd, with
+ * [literal] bracket escapes. en-US names. Unknown characters pass through.
+ */
+export function formatDailyName(format: string, date: Date): string {
+  return formatTokens(format, date, TOKENS, renderToken);
+}
+
 interface DailyNotesConfig {
   folder: string;
   format: string;
+  /** Vault-relative template note path, possibly without .md. '' = none. */
+  template: string;
 }
 
-const DEFAULT_CONFIG: DailyNotesConfig = { folder: '', format: 'YYYY-MM-DD' };
+const DEFAULT_CONFIG: DailyNotesConfig = { folder: '', format: 'YYYY-MM-DD', template: '' };
 
-/**
- * Trusted internal read of <root>/.obsidian/daily-notes.json — deliberately
- * not routed through resolveNotePath. Missing or invalid → Obsidian defaults.
- */
-async function readDailyConfig(vault: Vault): Promise<DailyNotesConfig> {
+/** Trusted internal read of a JSON file under <root>/.obsidian. */
+async function readJson(vault: Vault, ...segments: string[]): Promise<Record<string, unknown> | null> {
   let raw: string;
   try {
-    raw = await fs.readFile(
-      path.join(vault.root, '.obsidian', 'daily-notes.json'),
-      'utf8',
-    );
+    raw = await fs.readFile(path.join(vault.root, '.obsidian', ...segments), 'utf8');
   } catch {
-    return DEFAULT_CONFIG;
+    return null;
   }
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
   } catch {
-    return DEFAULT_CONFIG;
+    return null;
   }
   if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
-    return DEFAULT_CONFIG;
+    return null;
   }
-  const obj = parsed as Record<string, unknown>;
-  const folder = typeof obj['folder'] === 'string' ? obj['folder'] : DEFAULT_CONFIG.folder;
+  return parsed as Record<string, unknown>;
+}
+
+function configFrom(obj: Record<string, unknown>): DailyNotesConfig | null {
+  const folder = typeof obj['folder'] === 'string' ? obj['folder'] : '';
   const format =
     typeof obj['format'] === 'string' && obj['format'].trim().length > 0
       ? obj['format']
-      : DEFAULT_CONFIG.format;
-  return { folder, format };
+      : '';
+  const template = typeof obj['template'] === 'string' ? obj['template'] : '';
+  if (folder === '' && format === '' && template === '') return null;
+  return {
+    folder,
+    format: format === '' ? DEFAULT_CONFIG.format : format,
+    template,
+  };
+}
+
+/**
+ * Resolve the daily-notes settings the way Obsidian does, deliberately not
+ * routed through resolveNotePath. Two sources, in order:
+ *
+ *  1. core Daily Notes plugin: .obsidian/daily-notes.json
+ *  2. Periodic Notes plugin:   .obsidian/plugins/periodic-notes/data.json
+ *     (its `daily` section) — many vaults configure ONLY this one, and
+ *     ignoring it resolved daily notes to the vault root with the default
+ *     format instead of the user's journal folder.
+ *
+ * Missing or invalid everywhere → Obsidian defaults.
+ */
+async function readDailyConfig(vault: Vault): Promise<DailyNotesConfig> {
+  const core = await readJson(vault, 'daily-notes.json');
+  if (core !== null) {
+    const config = configFrom(core);
+    if (config !== null) return config;
+  }
+
+  const periodic = await readJson(vault, 'plugins', 'periodic-notes', 'data.json');
+  if (periodic !== null) {
+    const daily = periodic['daily'];
+    if (typeof daily === 'object' && daily !== null && !Array.isArray(daily)) {
+      const section = daily as Record<string, unknown>;
+      if (section['enabled'] !== false) {
+        const config = configFrom(section);
+        if (config !== null) return config;
+      }
+    }
+  }
+
+  return DEFAULT_CONFIG;
 }
 
 const DATE_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
@@ -192,4 +281,73 @@ export async function getDailyNote(vault: Vault, date?: string): Promise<DailyNo
   }
   const note = await readNote(vault, relPath);
   return { path: relPath, date: resolvedDate, exists: true, note };
+}
+
+/**
+ * Render the {{...}} placeholders Obsidian's core templates use in daily
+ * notes: {{title}}, {{date}}, {{time}} and {{date:FORMAT}} / {{time:FORMAT}}.
+ * Formatted time additionally supports H/HH, h/hh, m/mm, s/ss and A/a.
+ * Unknown placeholders are left untouched — better visible than silently eaten.
+ */
+export function renderDailyTemplate(template: string, day: Date, title: string): string {
+  const now = new Date();
+  const hhmm = `${pad(now.getHours(), 2)}:${pad(now.getMinutes(), 2)}`;
+  return template.replace(
+    /\{\{\s*(title|date|time)\s*(?::([^}]+))?\}\}/gi,
+    (whole, name: string, format: string | undefined) => {
+      switch (name.toLowerCase()) {
+        case 'title':
+          return title;
+        case 'date':
+          return format !== undefined ? formatDailyName(format, day) : isoDay(day);
+        case 'time':
+          return format !== undefined
+            ? formatTokens(format.trim(), now, TEMPLATE_TIME_TOKENS, renderTemplateTimeToken)
+            : hhmm;
+        default:
+          return whole as string;
+      }
+    },
+  );
+}
+
+/**
+ * Create the daily note for a date (default: today) at the configured
+ * location, seeding it from the configured daily-notes template when there is
+ * one. Idempotent: an existing note is left untouched and reported as such.
+ */
+export async function createDailyNote(
+  vault: Vault,
+  date?: string,
+): Promise<CreateDailyResult> {
+  const config = await readDailyConfig(vault);
+  const info = await getDailyNote(vault, date);
+  if (info.exists) {
+    return { path: info.path, date: info.date, created: false, templateApplied: false };
+  }
+
+  let content = '';
+  let templateApplied = false;
+  const templateSetting = config.template.trim().replace(/^\/+/, '');
+  if (templateSetting.length > 0) {
+    const candidates = /\.md$/i.test(templateSetting)
+      ? [templateSetting]
+      : [`${templateSetting}.md`];
+    for (const candidate of candidates) {
+      try {
+        const template = await readNote(vault, candidate);
+        const day = resolveDate(date);
+        const title = path.basename(info.path, '.md');
+        content = renderDailyTemplate(template.content, day, title);
+        templateApplied = true;
+        break;
+      } catch {
+        // Missing or invalid template → create the note empty rather than
+        // failing the capture; the result says the template was not applied.
+      }
+    }
+  }
+
+  const result = await createNote(vault, info.path, content);
+  return { path: result.path, date: info.date, created: true, templateApplied };
 }

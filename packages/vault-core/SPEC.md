@@ -50,6 +50,8 @@ building results.
 ## readNote(vault, relPath): Promise<NoteContent>
 
 - `NOT_FOUND` if missing.
+- Stream the file through a bounded buffer while calculating the full content
+  hash; never load the whole note into memory just to truncate it.
 - If size > `maxReadBytes`: return the first `maxReadBytes` bytes decoded as
   UTF-8 **without a broken trailing code point** (slice buffer, then trim any
   incomplete multibyte sequence at the end), `truncated: true`. `sizeBytes` is

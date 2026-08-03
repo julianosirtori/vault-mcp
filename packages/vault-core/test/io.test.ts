@@ -26,6 +26,7 @@ describe('readNote', () => {
       content: '# Hello\nworld\n',
       truncated: false,
       sizeBytes: Buffer.byteLength('# Hello\nworld\n'),
+      hash: expect.stringMatching(/^[0-9a-f]{12}$/) as unknown,
     });
   });
 
@@ -84,6 +85,19 @@ describe('readNote', () => {
     expect(note.truncated).toBe(true);
     expect(note.sizeBytes).toBe(1000);
   });
+
+  it('streams large notes instead of buffering them with readFile', async () => {
+    tv = await makeTempVault({ maxReadBytes: 10 });
+    await writeFile(tv.dir, 'big.md', 'x'.repeat(1000));
+    const readFile = vi.spyOn(fs, 'readFile');
+    try {
+      const note = await readNote(tv.vault, 'big.md');
+      expect(note.content).toBe('x'.repeat(10));
+      expect(readFile).not.toHaveBeenCalled();
+    } finally {
+      readFile.mockRestore();
+    }
+  });
 });
 
 describe('createNote', () => {
@@ -99,7 +113,10 @@ describe('createNote', () => {
 
   it('creates a note with the full content and returns its relative path', async () => {
     const result = await createNote(tv.vault, 'new.md', '# Fresh\n');
-    expect(result).toEqual({ path: 'new.md' });
+    expect(result).toEqual({
+      path: 'new.md',
+      hash: expect.stringMatching(/^[0-9a-f]{12}$/) as unknown,
+    });
     const raw = await fs.readFile(path.join(tv.dir, 'new.md'), 'utf8');
     expect(raw).toBe('# Fresh\n');
   });

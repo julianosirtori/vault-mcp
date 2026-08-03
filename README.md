@@ -60,16 +60,26 @@ vault. The origin is not reachable from the internet — it only receives
 traffic through the outbound tunnel, and answers **404** to anything that does
 not carry the shared origin secret.
 
-## The six tools
+## The sixteen tools
 
 | Tool | Type | What it actually does |
 | --- | --- | --- |
-| `search_notes` | read | Case-insensitive **literal substring** search across markdown notes (no regex, no semantic ranking). Returns path, line number and snippet. Low-trust folders (imported clippings) are excluded unless explicitly included. |
-| `read_note` | read | Full content of one note by vault-relative path. Output is sanitized (see below); very large notes are truncated and flagged. |
+| `search_notes` | read | Case-insensitive **literal substring** search across markdown notes (no regex, no semantic ranking). Returns path, line number and snippet. Supports pagination (`offset`), folder scoping (`path_prefix`), tag filtering (`tag`) and visiting newest notes first (`sort_by: mtime`). Low-trust folders (imported clippings) are excluded unless explicitly included. |
+| `read_note` | read | Full content of one note by vault-relative path, with a header reporting size and the note's **version hash** (for `expected_hash` on later edits). Output is sanitized (see below); very large notes are truncated and flagged. |
+| `read_notes` | read | Up to 10 notes in one call; per-note errors are reported inline. |
 | `list_recent` | read | Most recently modified notes, newest first (paths and timestamps only). |
-| `get_daily_note` | read | Resolves the daily note for a date (default today) using the vault's own `.obsidian/daily-notes.json` settings. If the note doesn't exist it returns the path it *would* have — it **never creates it**, and your daily-note **template is NOT applied** to notes created outside Obsidian. |
+| `get_vault_tree` | read | Every folder with its note count — the vault's table of contents. Structure only, never content. |
+| `get_daily_note` | read | Resolves the daily note for a date (default today) using the vault's own settings — core Daily Notes (`.obsidian/daily-notes.json`) **or the Periodic Notes plugin**. If the note doesn't exist it returns the path it *would* have — it **never creates it**. |
+| `create_daily_note` | write | Creates the daily note at the configured location, seeded from the configured **daily-notes template** (`{{title}}`, `{{date}}`, `{{time}}`, `{{date:FORMAT}}`). Idempotent: an existing note is left untouched. |
 | `create_note` | write | Creates a new note. **Fails if the note already exists** — it never overwrites. Parent folders are created as needed. Writes are atomic. |
 | `append_to_note` | write | Appends to the **end** of an **existing** note — the note must already exist (create it first), and existing content is never edited or overwritten. |
+| `append_to_section` | write | Inserts at the end of a specific **heading's section** (before the next same-or-higher-level heading; code fences don't count as headings) — capture into `## 📥 Inbox` without landing after a trailing dataview block. |
+| `edit_note` | write | Exact search-and-replace edits, **atomic and all-or-nothing**: each `old_string` must match exactly once; supports `expected_hash`, checked again immediately before replacement, so stale edits normally fail with `CONFLICT`. Plain filesystems provide no portable CAS against unrelated external writers, so a narrow final race remains. |
+| `move_note` | write | Moves/renames a note. Never overwrites the destination. Wiki-links are **not** rewritten. |
+| `delete_note` | write | Moves the note to the vault's own `.trash/` (same as Obsidian's "move to vault trash") — nothing is permanently erased. |
+| `list_tasks` | read | Checkbox tasks across the vault, parsed with **Obsidian Tasks plugin** conventions (📅 ⏳ 🛫 ✅, priorities, 🔁). Filters by status, due-date window and folder; sorted by due date; each task reports path, line and note version hash. |
+| `complete_task` | write | Flips `[ ]` to `[x]` and appends `✅ YYYY-MM-DD` in the exact Tasks-plugin format. Recurring tasks are completed but the next occurrence is not generated. |
+| `postpone_task` | write | Changes (or sets) a task's `📅` due date in the exact Tasks-plugin format. |
 
 Remote images in written content are de-embedded into plain links before
 touching disk, and note content returned to the model is stripped of channels
