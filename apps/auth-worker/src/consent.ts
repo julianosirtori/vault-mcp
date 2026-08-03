@@ -317,6 +317,16 @@ function consentPage(options: ConsentPageOptions): Response {
     options.errorMessage !== undefined
       ? `<p class="error" role="alert">${escapeHtml(options.errorMessage)}</p>`
       : '';
+  // Chrome enforces form-action against the redirect target of the POST
+  // response, so the (already validated) client redirect origin must be
+  // allowed alongside 'self' or the 302 back to the client is blocked.
+  let redirectOrigin = '';
+  try {
+    redirectOrigin = new URL(options.authRequest.redirectUri).origin;
+  } catch {
+    // Leave empty; the form still posts to 'self'.
+  }
+  const formAction = redirectOrigin ? `'self' ${redirectOrigin}` : "'self'";
 
   const html = `<!doctype html>
 <html lang="en">
@@ -373,9 +383,10 @@ function consentPage(options: ConsentPageOptions): Response {
       'content-type': 'text/html; charset=utf-8',
       'cache-control': 'no-store',
       // The consent page must never be framed (clickjacking) and never
-      // load or send anything anywhere ('self' form post only).
+      // load or send anything anywhere. form-action also covers the 302
+      // back to the client, so its validated redirect origin is allowed.
       'content-security-policy':
-        "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
+        `default-src 'none'; style-src 'unsafe-inline'; form-action ${formAction}; frame-ancestors 'none'; base-uri 'none'`,
       'x-frame-options': 'DENY',
       'referrer-policy': 'no-referrer',
     },
