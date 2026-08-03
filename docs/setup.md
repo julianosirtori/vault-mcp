@@ -73,13 +73,15 @@ sudo /home/vaultmcp/vault-mcp/infra/scripts/bootstrap   # re-run to completion
 
 `bootstrap` is idempotent, non-interactive and handles no secrets. It:
 
-- installs system dependencies (git, curl, jq; Xvfb noted as optional for the
-  official Obsidian CLI sync option);
+- installs system dependencies (git, curl, jq);
 - creates the dedicated unprivileged user (`vaultmcp` by default);
 - enables **linger** for that user, so its systemd user services survive
   logout and start at boot;
 - verifies/installs Node 22, pnpm (corepack) and the `cloudflared` binary
-  (into `~/.local/bin`);
+  (into `~/.local/bin`). Note that Node is a **system-wide** NodeSource
+  package: on a box already running something else on Node, this upgrades
+  that too (and replaces the bundled npm). On a shared VPS, check what else
+  depends on the current Node before the first run;
 - creates `~/vault`, `~/.config/vault-mcp/` and state directories;
 - links `start`/`doctor`/`autocommit` into `~/.local/bin` as `vault-mcp-*` —
   the systemd units call these fixed names;
@@ -94,6 +96,17 @@ vaultmcp` shell may not have the systemd user bus; prefer:
 ```sh
 sudo machinectl shell vaultmcp@
 ```
+
+If you do end up in a `sudo -iu` shell, the symptom is `systemctl --user`
+answering `Failed to connect to bus: No such file or directory`. Point it at
+the runtime directory of the user you are actually running as:
+
+```sh
+export XDG_RUNTIME_DIR=/run/user/$(id -u)
+```
+
+Only interactive shells need this. Linger is what makes the units start at
+boot, and it needs nothing from your session.
 
 ## 2. Build the server on the VPS
 
@@ -131,10 +144,10 @@ hard requirement:
 
 Options:
 
-- **Official Obsidian CLI** (syncs with Obsidian Sync). It drives the
-  Electron app headlessly, which on a server means running under Xvfb — it
-  works, but it is a desktop app being coaxed into a server role; expect
-  occasional fragility.
+- **`obsidian-headless`** (syncs with Obsidian Sync) — the official CLI,
+  published by the Obsidian team. It is a genuine headless client: no
+  Electron, no Xvfb, no desktop app coaxed into a server role. This is the
+  path walked through below.
 - **Any bidirectional file syncer** you already trust (e.g. Syncthing,
   Unison in bidirectional mode) pointed at the same folder your other devices
   sync.
@@ -143,8 +156,59 @@ Consider syncing a **subset** of your vault rather than all of it — if the
 VPS is ever compromised, only what's synced is exposed (see the
 [threat model](threat-model.md)).
 
-You will hand the long-running sync command to `configure` in the next step;
-it gets wrapped as `~/.config/vault-mcp/sync-command` and supervised by the
+### Worked example: `obsidian-headless`
+
+As the dedicated user:
+
+```sh
+npm config set prefix ~/.local     # see below — without this, npm -g fails
+npm install -g obsidian-headless   # installs the `ob` binary
+```
+
+The `npm config set prefix` is not optional. The default global prefix is
+root-owned (`/usr/lib/node_modules` on the NodeSource layout bootstrap
+installs), so `npm install -g` as the unprivileged user dies with `EACCES`.
+Do not reach for `sudo`: `ob` stores its credentials in the home directory of
+whoever runs it, and the unit runs as `vaultmcp`.
+
+Then link the account and set the vault up — **interactively, now**, so the
+credentials are on disk before anything runs unattended:
+
+```sh
+ob login
+ob sync-list-remote                       # the exact remote vault name
+cd ~/vault && ob sync-setup --vault "MyVault"
+ob sync-config                            # verify: "Sync mode: bidirectional"
+```
+
+`ob sync-config --mode` also accepts `pull-only` and `mirror-remote`. Those
+are the revert-style modes the warning above is about — `mirror-remote` in
+particular will delete every note the server writes. `bidirectional` is the
+default; the point of running `ob sync-config` is to confirm nothing else was
+selected.
+
+The command to hand to `configure` in the next step is:
+
+```
+/home/vaultmcp/.local/bin/ob sync --path /home/vaultmcp/vault --continuous
+```
+
+Every part of that line is load-bearing:
+
+- **absolute path to `ob`** — the command runs inside a systemd unit, whose
+  `PATH` does not include `~/.local/bin` even though your login shell's does.
+  A bare `ob` fails at boot with `exec: ob: not found` (exit 127) and
+  crash-loops. `configure` resolves this for you now, but the same trap
+  applies to any client you install into your home directory;
+- **absolute `--path`** — the units set no `WorkingDirectory`, so the wrapper
+  runs with the working directory at `$HOME`, not the vault. A client that
+  defaults to "the current directory" would target the home directory itself
+  — which holds `~/.config/vault-mcp/env` and the tunnel credentials;
+- **`--continuous`** — `vault-sync.service` supervises a foreground process.
+  A one-shot sync exits cleanly and systemd restarts it forever.
+
+You will hand this long-running command to `configure` in the next step; it
+gets wrapped as `~/.config/vault-mcp/sync-command` and supervised by the
 `vault-sync` systemd unit.
 
 ## 4. `configure` — the only interactive step
@@ -187,17 +251,56 @@ cloudflared tunnel create vault-mcp
 cloudflared tunnel route dns vault-mcp vault.example.com
 ```
 
-Move the generated credentials JSON under `~/.config/vault-mcp/`, then write
-`~/.config/vault-mcp/tunnel.yml` based on
+`tunnel login` has no browser to open on a headless VPS, so it prints a URL
+instead — open that on your own machine and pick the zone there. It writes
+`~/.cloudflared/cert.pem` on the VPS when you're done. `tunnel create` then
+prints the tunnel UUID and writes `~/.cloudflared/<UUID>.json`.
+
+Move that credentials JSON under `~/.config/vault-mcp/` with the rest of the
+local state, and keep it readable only by its owner:
+
+```sh
+mv ~/.cloudflared/<UUID>.json ~/.config/vault-mcp/
+chmod 600 ~/.config/vault-mcp/<UUID>.json
+```
+
+Then write `~/.config/vault-mcp/tunnel.yml` based on
 [infra/tunnel/config.yml.example](../infra/tunnel/config.yml.example): one
 ingress rule sending `vault.example.com` to `http://127.0.0.1:9820`, then a
 catch-all 404. Keep the `metrics: 127.0.0.1:9821` line — `doctor` probes
 `/ready` there to verify the tunnel holds live edge connections — and give
 `credentials-file` an absolute path (cloudflared does not expand `~`).
 
+`cloudflared` can check the file before systemd does. Note the flag position:
+`--config` belongs to `tunnel`, not to `ingress validate`.
+
+```sh
+cloudflared tunnel --config ~/.config/vault-mcp/tunnel.yml ingress validate
+cloudflared tunnel --config ~/.config/vault-mcp/tunnel.yml ingress rule \
+  https://vault.example.com/mcp     # must match the rule, not the catch-all
+```
+
+### Check the origin before building the edge
+
+Worth doing now rather than after the Worker exists — it tells you which half
+is broken while there is only one half:
+
+```sh
+systemctl --user start vault-mcp vault-tunnel
+curl -si https://vault.example.com/mcp | head -1
+```
+
+| Response | Meaning |
+| --- | --- |
+| `HTTP/2 404` | **What you want.** The route works and the origin refused a request with no `x-origin-secret` — exactly its job. |
+| Cloudflare error 1033 / `530` | The DNS record does not point at this tunnel, or cloudflared holds no edge connections. Re-run `tunnel route dns`. |
+| `502` / `503` | Tunnel is up, the server is not: `journalctl --user -u vault-mcp -n 50`. |
+
 Note that reaching `vault.example.com` directly gains an attacker nothing:
 without the `x-origin-secret` header that only the Worker attaches, the
-origin answers 404 to everything.
+origin answers 404 to everything. That is why the healthy answer above is a
+404 — and why a 404 *after* the Worker is deployed means the two sides
+disagree about the secret.
 
 ## 6. Deploy the auth Worker
 
@@ -227,6 +330,21 @@ npx wrangler secret put ORIGIN_SECRET      # same value configure generated on t
 npx wrangler secret put CONSENT_PASSWORD   # high entropy, e.g.: openssl rand -base64 24
 npx wrangler deploy
 ```
+
+`ORIGIN_SECRET` is stored **single-quoted** in `~/.config/vault-mcp/env` —
+that quoting is what lets systemd and bash read the same file. The quotes are
+syntax, not part of the secret: pasting `'abc…'` instead of `abc…` gives the
+origin a header it does not recognize, and the failure looks exactly like a
+misrouted tunnel (a 404 with no explanation anywhere). Reading the value
+through the shell avoids the question entirely — on the VPS:
+
+```sh
+sh -c 'set -a; . ~/.config/vault-mcp/env; printf %s "$ORIGIN_SECRET"'
+```
+
+Secrets take effect as soon as `wrangler secret put` returns; rotating one
+later needs no redeploy, only a matching `systemctl --user restart vault-mcp`
+on the origin side.
 
 (There is no cookie secret to set: the OAuth library keeps all its state in
 KV and issues no signed cookies.)
