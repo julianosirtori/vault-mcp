@@ -26,6 +26,7 @@ describe('readNote', () => {
       content: '# Hello\nworld\n',
       truncated: false,
       sizeBytes: Buffer.byteLength('# Hello\nworld\n'),
+      hash: expect.stringMatching(/^[0-9a-f]{12}$/) as unknown,
     });
   });
 
@@ -99,7 +100,10 @@ describe('createNote', () => {
 
   it('creates a note with the full content and returns its relative path', async () => {
     const result = await createNote(tv.vault, 'new.md', '# Fresh\n');
-    expect(result).toEqual({ path: 'new.md' });
+    expect(result).toEqual({
+      path: 'new.md',
+      hash: expect.stringMatching(/^[0-9a-f]{12}$/) as unknown,
+    });
     const raw = await fs.readFile(path.join(tv.dir, 'new.md'), 'utf8');
     expect(raw).toBe('# Fresh\n');
   });

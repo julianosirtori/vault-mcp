@@ -290,15 +290,25 @@ rotating secrets, restoring notes from git) is in
 
 ## Known limitations (by design — worth knowing before you rely on it)
 
-- Daily notes created through the server do **not** get your daily-note
-  template: templates usually contain plugin syntax (Templater, etc.) that
-  only the Obsidian runtime can expand. `get_daily_note` reads your vault's
-  daily-notes settings (folder, filename format — a subset of moment tokens:
-  `YYYY YY MMMM MMM MM M DD D dddd ddd` and `[literal]` escapes) so paths
-  match what Obsidian shows, but it never creates the note itself.
-- `append_to_note` requires the note to exist; `create_note` refuses to
-  overwrite. There is no delete, no move, no rename.
+- `create_daily_note` applies your daily-note template, rendering the core
+  placeholders (`{{title}}`, `{{date}}`, `{{time}}`, `{{date:FORMAT}}`) — but
+  plugin syntax (Templater, etc.) is **not** executed and stays literal in the
+  note. `get_daily_note` reads your vault's daily-notes settings (core Daily
+  Notes or the Periodic Notes plugin; folder, filename format — a subset of
+  moment tokens: `YYYY YY MMMM MMM MM M DD D dddd ddd` and `[literal]`
+  escapes) so paths match what Obsidian shows, but it never creates the note
+  itself.
+- `append_to_note` requires the note to exist; `create_note` and `move_note`
+  refuse to overwrite; `delete_note` only moves notes into the vault's own
+  `.trash/` folder. `move_note` does **not** rewrite wiki-links that point at
+  the old name.
+- `edit_note` requires each `old_string` to match exactly once; pass the
+  `version` hash from a previous read as `expected_hash` to detect concurrent
+  edits (sync from another device) instead of overwriting them.
 - Search is a case-insensitive **literal substring** match, not regex and not
   semantic.
+- `complete_task` does not generate the next occurrence of recurring (🔁)
+  tasks — open the task in Obsidian if you rely on the Tasks plugin's
+  recurrence.
 - Only `.md` files are reachable, and hidden folders (including `.obsidian`)
   are blocked from every tool.

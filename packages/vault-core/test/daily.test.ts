@@ -1,7 +1,7 @@
 import * as path from 'node:path';
 import { promises as fs } from 'node:fs';
 import { afterEach, describe, expect, it } from 'vitest';
-import { formatDailyName, getDailyNote } from '@vault-mcp/core';
+import { createDailyNote, formatDailyName, getDailyNote } from '@vault-mcp/core';
 import { cleanup, expectVaultError, makeTempVault, writeFile } from './helpers.js';
 import type { TempVault } from './helpers.js';
 
@@ -12,6 +12,12 @@ async function writeDailyConfig(dir: string, config: unknown): Promise<void> {
     typeof config === 'string' ? config : JSON.stringify(config),
     'utf8',
   );
+}
+
+async function writePeriodicConfig(dir: string, config: unknown): Promise<void> {
+  const pluginDir = path.join(dir, '.obsidian', 'plugins', 'periodic-notes');
+  await fs.mkdir(pluginDir, { recursive: true });
+  await fs.writeFile(path.join(pluginDir, 'data.json'), JSON.stringify(config), 'utf8');
 }
 
 describe('formatDailyName', () => {
@@ -132,6 +138,7 @@ describe('getDailyNote', () => {
       content: '# Today\n',
       truncated: false,
       sizeBytes: 8,
+      hash: expect.stringMatching(/^[0-9a-f]{12}$/) as unknown,
     });
   });
 
@@ -178,5 +185,115 @@ describe('getDailyNote', () => {
 
     await writeDailyConfig(tv.dir, { folder: '.obsidian', format: 'YYYY-MM-DD' });
     await expectVaultError(getDailyNote(tv.vault, '2026-08-02'), 'HIDDEN_PATH');
+  });
+
+  it('falls back to the Periodic Notes plugin config when the core one is absent', async () => {
+    tv = await makeTempVault();
+    await writePeriodicConfig(tv.dir, {
+      daily: { enabled: true, folder: '5-journal', format: 'YYYY-MM-DD' },
+    });
+    const info = await getDailyNote(tv.vault, '2026-08-03');
+    expect(info.path).toBe('5-journal/2026-08-03.md');
+  });
+
+  it('prefers the core config over Periodic Notes when both exist', async () => {
+    tv = await makeTempVault();
+    await writeDailyConfig(tv.dir, { folder: 'core-journal', format: 'YYYY-MM-DD' });
+    await writePeriodicConfig(tv.dir, {
+      daily: { enabled: true, folder: '5-journal', format: 'YYYY-MM-DD' },
+    });
+    const info = await getDailyNote(tv.vault, '2026-08-03');
+    expect(info.path).toBe('core-journal/2026-08-03.md');
+  });
+
+  it('ignores a disabled Periodic Notes daily section', async () => {
+    tv = await makeTempVault();
+    await writePeriodicConfig(tv.dir, {
+      daily: { enabled: false, folder: '5-journal', format: 'YYYY-MM-DD' },
+    });
+    const info = await getDailyNote(tv.vault, '2026-08-03');
+    expect(info.path).toBe('2026-08-03.md');
+  });
+});
+
+describe('createDailyNote', () => {
+  let tv: TempVault;
+
+  afterEach(async () => {
+    await cleanup(tv);
+  });
+
+  it('creates the note at the configured location, empty without a template', async () => {
+    tv = await makeTempVault();
+    await writeDailyConfig(tv.dir, { folder: 'journal', format: 'YYYY-MM-DD' });
+    const result = await createDailyNote(tv.vault, '2026-08-03');
+    expect(result).toEqual({
+      path: 'journal/2026-08-03.md',
+      date: '2026-08-03',
+      created: true,
+      templateApplied: false,
+    });
+    expect(await fs.readFile(path.join(tv.dir, 'journal/2026-08-03.md'), 'utf8')).toBe('');
+  });
+
+  it('seeds the note from the configured template with placeholders rendered', async () => {
+    tv = await makeTempVault();
+    await writeDailyConfig(tv.dir, {
+      folder: 'journal',
+      format: 'YYYY-MM-DD',
+      template: 'templates/daily',
+    });
+    await writeFile(
+      tv.dir,
+      'templates/daily.md',
+      '# {{title}}\n\nDate: {{date}} ({{date:dddd}})\n\n## 📥 Inbox Rápido\n\n## 🎯 Foco do Dia\n',
+    );
+    const result = await createDailyNote(tv.vault, '2026-08-02');
+    expect(result.created).toBe(true);
+    expect(result.templateApplied).toBe(true);
+    const raw = await fs.readFile(path.join(tv.dir, 'journal/2026-08-02.md'), 'utf8');
+    expect(raw).toBe(
+      '# 2026-08-02\n\nDate: 2026-08-02 (Sunday)\n\n## 📥 Inbox Rápido\n\n## 🎯 Foco do Dia\n',
+    );
+  });
+
+  it('is idempotent: an existing note is left untouched', async () => {
+    tv = await makeTempVault();
+    await writeDailyConfig(tv.dir, { folder: 'journal', format: 'YYYY-MM-DD' });
+    await writeFile(tv.dir, 'journal/2026-08-03.md', 'already here\n');
+    const result = await createDailyNote(tv.vault, '2026-08-03');
+    expect(result.created).toBe(false);
+    expect(await fs.readFile(path.join(tv.dir, 'journal/2026-08-03.md'), 'utf8')).toBe(
+      'already here\n',
+    );
+  });
+
+  it('creates an empty note when the template is missing, and reports it', async () => {
+    tv = await makeTempVault();
+    await writeDailyConfig(tv.dir, {
+      folder: 'journal',
+      format: 'YYYY-MM-DD',
+      template: 'templates/nope',
+    });
+    const result = await createDailyNote(tv.vault, '2026-08-03');
+    expect(result.created).toBe(true);
+    expect(result.templateApplied).toBe(false);
+  });
+
+  it('reads the template from the Periodic Notes config too', async () => {
+    tv = await makeTempVault();
+    await writePeriodicConfig(tv.dir, {
+      daily: {
+        enabled: true,
+        folder: '5-journal',
+        format: 'YYYY-MM-DD',
+        template: 'templates/daily.md',
+      },
+    });
+    await writeFile(tv.dir, 'templates/daily.md', 'from periodic {{date}}\n');
+    const result = await createDailyNote(tv.vault, '2026-08-03');
+    expect(result.templateApplied).toBe(true);
+    const raw = await fs.readFile(path.join(tv.dir, '5-journal/2026-08-03.md'), 'utf8');
+    expect(raw).toBe('from periodic 2026-08-03\n');
   });
 });

