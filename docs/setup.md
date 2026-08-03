@@ -291,7 +291,8 @@ rotating secrets, restoring notes from git) is in
 ## Known limitations (by design — worth knowing before you rely on it)
 
 - `create_daily_note` applies your daily-note template, rendering the core
-  placeholders (`{{title}}`, `{{date}}`, `{{time}}`, `{{date:FORMAT}}`) — but
+  placeholders (`{{title}}`, `{{date}}`, `{{time}}`, `{{date:FORMAT}}`,
+  `{{time:FORMAT}}`; time supports `H/HH`, `h/hh`, `m/mm`, `s/ss`, `A/a`) — but
   plugin syntax (Templater, etc.) is **not** executed and stays literal in the
   note. `get_daily_note` reads your vault's daily-notes settings (core Daily
   Notes or the Periodic Notes plugin; folder, filename format — a subset of
@@ -303,8 +304,12 @@ rotating secrets, restoring notes from git) is in
   `.trash/` folder. `move_note` does **not** rewrite wiki-links that point at
   the old name.
 - `edit_note` requires each `old_string` to match exactly once; pass the
-  `version` hash from a previous read as `expected_hash` to detect concurrent
-  edits (sync from another device) instead of overwriting them.
+  `version` hash from a previous read as `expected_hash` to detect stale edits.
+  The version is checked again immediately before replacement, but a narrow
+  final race with unrelated external writers remains because ordinary
+  filesystems do not provide content-based compare-and-swap. `complete_task`
+  and `postpone_task` require the hash returned by `list_tasks`, since their
+  line number is only meaningful for that exact note version.
 - Search is a case-insensitive **literal substring** match, not regex and not
   semantic.
 - `complete_task` does not generate the next occurrence of recurring (🔁)

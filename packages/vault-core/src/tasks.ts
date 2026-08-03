@@ -35,11 +35,20 @@ const PRIORITY_SIGNIFIERS: ReadonlyArray<readonly [string, TaskPriority]> = [
   ['⏬', 'lowest'],
 ];
 
-const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
+const DAY_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
 
 function assertDay(value: string, label: string): void {
-  if (!DAY_RE.test(value)) {
-    throw new VaultError('INVALID_PATH', `${label} must be YYYY-MM-DD, got "${value}"`);
+  const match = DAY_RE.exec(value);
+  const year = Number(match?.[1]);
+  const month = Number(match?.[2]);
+  const day = Number(match?.[3]);
+  const leap = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+  const days = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+  if (match === null || month < 1 || month > 12 || day < 1 || day > (days[month - 1] ?? 0)) {
+    throw new VaultError(
+      'INVALID_PATH',
+      `${label} must be a real calendar day in YYYY-MM-DD format, got "${value}"`,
+    );
   }
 }
 
@@ -285,7 +294,7 @@ export async function completeTask(
   }
   const updated = `${parsed.indent}${parsed.bullet}[x] ${rest}`;
   lines[lineNo - 1] = updated;
-  const written = await replaceNoteContent(vault, relPath, lines.join('\n'));
+  const written = await replaceNoteContent(vault, relPath, lines.join('\n'), opts);
 
   return {
     path: written.path,
@@ -326,7 +335,7 @@ export async function postponeTask(
   }
   const updated = `${parsed.indent}${parsed.bullet}[${parsed.statusChar}] ${rest}`;
   lines[lineNo - 1] = updated;
-  const written = await replaceNoteContent(vault, relPath, lines.join('\n'));
+  const written = await replaceNoteContent(vault, relPath, lines.join('\n'), opts);
 
   return {
     path: written.path,

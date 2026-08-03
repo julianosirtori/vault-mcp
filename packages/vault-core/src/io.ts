@@ -56,12 +56,27 @@ async function syncDir(dir: string): Promise<void> {
   }
 }
 
-/** Atomically replace `abs` with `content` (tmp file + rename + dir sync). */
-async function replaceFile(abs: string, content: string): Promise<void> {
+/**
+ * Atomically replace `abs` with `content` (tmp file + rename + dir sync).
+ *
+ * When a version is supplied, validate it again after the potentially-slow
+ * temp-file write/fsync and immediately before rename. Plain filesystem APIs
+ * do not offer a portable compare-and-swap against unrelated writers, but this
+ * keeps the unavoidable final race window as small as possible.
+ */
+async function replaceFile(
+  abs: string,
+  content: string,
+  guard: { relPath: string; expectedHash?: string } | undefined = undefined,
+): Promise<void> {
   const dir = path.dirname(abs);
   const tmp = tmpPathFor(abs);
   await writeTmpFile(tmp, content);
   try {
+    if (guard?.expectedHash !== undefined) {
+      const current = await readRaw(abs, guard.relPath);
+      assertVersion(current, guard.relPath, guard.expectedHash);
+    }
     await fs.rename(tmp, abs);
   } catch (err) {
     await fs.unlink(tmp).catch(() => {});
@@ -84,9 +99,9 @@ async function readRaw(abs: string, relPath: string): Promise<Buffer> {
 
 /**
  * Optimistic-concurrency check: the caller read the note at some version and
- * asks the write to land only on that same version. Best-effort by design —
- * the server handles tool calls sequentially, so read-check-write races only
- * exist against external writers (sync), for which this is exactly the guard.
+ * asks the write to land only on that same version. Best-effort against
+ * unrelated external writers: callers check once before preparing content and
+ * replaceFile checks again immediately before the atomic rename.
  */
 function assertVersion(
   raw: Buffer,
@@ -106,32 +121,54 @@ function assertVersion(
 
 export async function readNote(vault: Vault, relPath: string): Promise<NoteContent> {
   const abs = await resolveNotePath(vault, relPath);
-  const raw = await readRaw(abs, relPath);
-  const sizeBytes = raw.length;
-  const hash = contentHash(raw);
-
-  if (sizeBytes <= vault.maxReadBytes) {
-    return {
-      path: toVaultRelative(vault, abs),
-      content: raw.toString('utf8'),
-      truncated: false,
-      sizeBytes,
-      hash,
-    };
+  let handle;
+  try {
+    handle = await fs.open(abs, 'r');
+  } catch (err) {
+    if (isFsError(err, 'ENOENT')) {
+      throw new VaultError('NOT_FOUND', `note "${relPath}" not found`);
+    }
+    throw err;
   }
 
-  // stream: true makes TextDecoder hold back an incomplete trailing
-  // multibyte sequence instead of emitting a replacement character.
-  const content = new TextDecoder('utf-8').decode(raw.subarray(0, vault.maxReadBytes), {
-    stream: true,
-  });
-  return {
-    path: toVaultRelative(vault, abs),
-    content,
-    truncated: true,
-    sizeBytes,
-    hash,
-  };
+  try {
+    const maxReadBytes = Math.max(0, Math.floor(vault.maxReadBytes));
+    const prefix = Buffer.alloc(maxReadBytes);
+    const chunk = Buffer.allocUnsafe(64 * 1024);
+    const hasher = createHash('sha256');
+    let prefixBytes = 0;
+    let sizeBytes = 0;
+
+    for (;;) {
+      const { bytesRead } = await handle.read(chunk, 0, chunk.length, sizeBytes);
+      if (bytesRead === 0) break;
+      const bytes = chunk.subarray(0, bytesRead);
+      hasher.update(bytes);
+      if (prefixBytes < prefix.length) {
+        const copied = Math.min(bytesRead, prefix.length - prefixBytes);
+        bytes.copy(prefix, prefixBytes, 0, copied);
+        prefixBytes += copied;
+      }
+      sizeBytes += bytesRead;
+    }
+
+    const truncated = sizeBytes > maxReadBytes;
+    const visible = prefix.subarray(0, prefixBytes);
+    const content = truncated
+      ? // stream:true holds back an incomplete trailing multibyte sequence.
+        new TextDecoder('utf-8').decode(visible, { stream: true })
+      : visible.toString('utf8');
+
+    return {
+      path: toVaultRelative(vault, abs),
+      content,
+      truncated,
+      sizeBytes,
+      hash: hasher.digest('hex').slice(0, 12),
+    };
+  } finally {
+    await handle.close();
+  }
 }
 
 export async function createNote(
@@ -183,7 +220,7 @@ export async function appendToNote(
     result += '\n';
   }
 
-  await replaceFile(abs, result);
+  await replaceFile(abs, result, { relPath, expectedHash: opts.expectedHash });
 
   return {
     path: toVaultRelative(vault, abs),
@@ -200,9 +237,10 @@ export async function replaceNoteContent(
   vault: Vault,
   relPath: string,
   content: string,
+  opts: WriteGuardOptions = {},
 ): Promise<{ path: string; sizeBytes: number; hash: string }> {
   const abs = await resolveNotePath(vault, relPath);
-  await replaceFile(abs, content);
+  await replaceFile(abs, content, { relPath, expectedHash: opts.expectedHash });
   return {
     path: toVaultRelative(vault, abs),
     sizeBytes: Buffer.byteLength(content, 'utf8'),
@@ -259,7 +297,7 @@ export async function editNote(
       content.slice(0, first) + newString + content.slice(first + oldString.length);
   }
 
-  await replaceFile(abs, content);
+  await replaceFile(abs, content, { relPath, expectedHash: opts.expectedHash });
 
   return {
     path: toVaultRelative(vault, abs),

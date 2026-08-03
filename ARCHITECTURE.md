@@ -179,10 +179,12 @@ e caro em chamadas para perguntas sobre tarefas):
 Duas decisões transversais da 0.2:
 
 - **Versionamento otimista.** Toda leitura devolve um hash curto do conteúdo
-  (`version`), e toda escrita de edição aceita `expected_hash`. Se a nota mudou
-  no disco entre a leitura e a escrita (sync do celular, por exemplo), a tool
-  falha com `CONFLICT` em vez de sobrescrever — o mesmo problema de qualquer
-  editor colaborativo, resolvido do mesmo jeito.
+  (`version`), e toda escrita de edição aceita `expected_hash`; operações por
+  número de linha exigem esse hash. A versão é conferida antes de preparar a
+  alteração e novamente imediatamente antes do rename atômico. Mudanças já
+  observáveis falham com `CONFLICT`; ainda existe uma janela residual estreita
+  contra processos externos, pois o filesystem não oferece CAS portátil por
+  conteúdo.
 - **Busca paginável.** `search_notes` ganhou `offset`, `path_prefix`, `tag` e
   `sort_by: mtime`, e informa quando há mais resultados além do limite. Regex
   continua fora de propósito: query de busca é entrada não confiável e nunca é

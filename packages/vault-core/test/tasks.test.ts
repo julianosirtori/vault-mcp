@@ -187,4 +187,14 @@ describe('postponeTask', () => {
     await writeFile(tv.dir, 't.md', '- [ ] x\n');
     await expectVaultError(postponeTask(tv.vault, 't.md', 1, '10/08/2026'), 'INVALID_PATH');
   });
+
+  it('rejects impossible calendar dates', async () => {
+    await writeFile(tv.dir, 't.md', '- [ ] x\n');
+    await expectVaultError(postponeTask(tv.vault, 't.md', 1, '2026-02-30'), 'INVALID_PATH');
+    await expectVaultError(completeTask(tv.vault, 't.md', 1, '2026-13-01'), 'INVALID_PATH');
+    await expectVaultError(
+      listTasks(tv.vault, { dueBefore: '2025-02-29' }),
+      'INVALID_PATH',
+    );
+  });
 });

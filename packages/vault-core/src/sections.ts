@@ -104,6 +104,6 @@ export async function appendToSection(
   let result = updated.join('\n');
   if (!result.endsWith('\n')) result += '\n';
 
-  const written = await replaceNoteContent(vault, relPath, result);
+  const written = await replaceNoteContent(vault, relPath, result, opts);
   return { ...written, insertedAtLine: end + 1 };
 }

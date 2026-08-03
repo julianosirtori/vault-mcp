@@ -74,7 +74,7 @@ not carry the shared origin secret.
 | `create_note` | write | Creates a new note. **Fails if the note already exists** — it never overwrites. Parent folders are created as needed. Writes are atomic. |
 | `append_to_note` | write | Appends to the **end** of an **existing** note — the note must already exist (create it first), and existing content is never edited or overwritten. |
 | `append_to_section` | write | Inserts at the end of a specific **heading's section** (before the next same-or-higher-level heading; code fences don't count as headings) — capture into `## 📥 Inbox` without landing after a trailing dataview block. |
-| `edit_note` | write | Exact search-and-replace edits, **atomic and all-or-nothing**: each `old_string` must match exactly once; supports `expected_hash` so a concurrent change on another device fails with `CONFLICT` instead of being clobbered. |
+| `edit_note` | write | Exact search-and-replace edits, **atomic and all-or-nothing**: each `old_string` must match exactly once; supports `expected_hash`, checked again immediately before replacement, so stale edits normally fail with `CONFLICT`. Plain filesystems provide no portable CAS against unrelated external writers, so a narrow final race remains. |
 | `move_note` | write | Moves/renames a note. Never overwrites the destination. Wiki-links are **not** rewritten. |
 | `delete_note` | write | Moves the note to the vault's own `.trash/` (same as Obsidian's "move to vault trash") — nothing is permanently erased. |
 | `list_tasks` | read | Checkbox tasks across the vault, parsed with **Obsidian Tasks plugin** conventions (📅 ⏳ 🛫 ✅, priorities, 🔁). Filters by status, due-date window and folder; sorted by due date; each task reports path, line and note version hash. |

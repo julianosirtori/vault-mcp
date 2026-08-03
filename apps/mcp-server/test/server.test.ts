@@ -157,6 +157,11 @@ describe('tool surface', () => {
       'read_notes',
       'search_notes',
     ]);
+    for (const name of ['complete_task', 'postpone_task']) {
+      const tool = tools.find((candidate) => candidate.name === name);
+      expect(tool?.annotations?.destructiveHint).toBe(true);
+      expect(tool?.inputSchema.required).toContain('expected_hash');
+    }
     await client.close();
   });
 
@@ -443,13 +448,18 @@ describe('tool surface', () => {
     expect(due.text).toContain('overdue thing');
     expect(due.text).not.toContain('later thing');
     expect(due.text).toMatch(/notes\/todo\.md:1/);
+    const listedHash = /version ([0-9a-f]{12})/.exec(due.text)?.[1];
+    expect(listedHash).toBeDefined();
 
     const completed = await call(client, 'complete_task', {
       path: 'notes/todo.md',
       line: 1,
       done_date: '2026-08-03',
+      expected_hash: listedHash,
     });
     expect(completed.isError).toBe(false);
+    const completedHash = /version ([0-9a-f]{12})/.exec(completed.text)?.[1];
+    expect(completedHash).toBeDefined();
     const afterComplete = await fs.readFile(
       path.join(vaultRoot, 'notes/todo.md'),
       'utf8',
@@ -460,6 +470,7 @@ describe('tool surface', () => {
       path: 'notes/todo.md',
       line: 2,
       new_date: '2027-02-01',
+      expected_hash: completedHash,
     });
     expect(postponed.isError).toBe(false);
     const afterPostpone = await fs.readFile(

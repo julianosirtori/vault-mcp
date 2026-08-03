@@ -1,6 +1,6 @@
 import * as path from 'node:path';
 import { promises as fs } from 'node:fs';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createDailyNote, formatDailyName, getDailyNote } from '@vault-mcp/core';
 import { cleanup, expectVaultError, makeTempVault, writeFile } from './helpers.js';
 import type { TempVault } from './helpers.js';
@@ -64,6 +64,7 @@ describe('getDailyNote', () => {
   let tv: TempVault;
 
   afterEach(async () => {
+    vi.useRealTimers();
     await cleanup(tv);
   });
 
@@ -254,6 +255,28 @@ describe('createDailyNote', () => {
     const raw = await fs.readFile(path.join(tv.dir, 'journal/2026-08-02.md'), 'utf8');
     expect(raw).toBe(
       '# 2026-08-02\n\nDate: 2026-08-02 (Sunday)\n\n## 📥 Inbox Rápido\n\n## 🎯 Foco do Dia\n',
+    );
+  });
+
+  it('renders formatted time placeholders with Moment-style time tokens', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 7, 3, 17, 4, 9));
+    tv = await makeTempVault();
+    await writeDailyConfig(tv.dir, {
+      folder: 'journal',
+      format: 'YYYY-MM-DD',
+      template: 'templates/time',
+    });
+    await writeFile(
+      tv.dir,
+      'templates/time.md',
+      '{{time:HH:mm:ss}} / {{time:h:mm A}} / {{time}}\n',
+    );
+
+    await createDailyNote(tv.vault, '2026-08-03');
+
+    expect(await fs.readFile(path.join(tv.dir, 'journal/2026-08-03.md'), 'utf8')).toBe(
+      '17:04:09 / 5:04 PM / 17:04\n',
     );
   });
 

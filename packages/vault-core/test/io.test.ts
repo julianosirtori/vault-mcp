@@ -85,6 +85,19 @@ describe('readNote', () => {
     expect(note.truncated).toBe(true);
     expect(note.sizeBytes).toBe(1000);
   });
+
+  it('streams large notes instead of buffering them with readFile', async () => {
+    tv = await makeTempVault({ maxReadBytes: 10 });
+    await writeFile(tv.dir, 'big.md', 'x'.repeat(1000));
+    const readFile = vi.spyOn(fs, 'readFile');
+    try {
+      const note = await readNote(tv.vault, 'big.md');
+      expect(note.content).toBe('x'.repeat(10));
+      expect(readFile).not.toHaveBeenCalled();
+    } finally {
+      readFile.mockRestore();
+    }
+  });
 });
 
 describe('createNote', () => {

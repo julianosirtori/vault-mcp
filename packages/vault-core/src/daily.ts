@@ -32,6 +32,19 @@ const WEEKDAYS = [
 
 // Longest-first within each letter family so e.g. YYYY wins over YY.
 const TOKENS = ['YYYY', 'YY', 'MMMM', 'MMM', 'MM', 'M', 'dddd', 'ddd', 'DD', 'D'] as const;
+const TEMPLATE_TIME_TOKENS = [
+  ...TOKENS,
+  'HH',
+  'H',
+  'hh',
+  'h',
+  'mm',
+  'm',
+  'ss',
+  's',
+  'A',
+  'a',
+] as const;
 
 function pad(n: number, width: number): string {
   return String(n).padStart(width, '0');
@@ -64,11 +77,40 @@ function renderToken(token: string, date: Date): string {
   }
 }
 
-/**
- * Moment-subset formatter: YYYY YY MMMM MMM MM M DD D dddd ddd, with
- * [literal] bracket escapes. en-US names. Unknown characters pass through.
- */
-export function formatDailyName(format: string, date: Date): string {
+function renderTemplateTimeToken(token: string, date: Date): string {
+  const hours = date.getHours();
+  switch (token) {
+    case 'HH':
+      return pad(hours, 2);
+    case 'H':
+      return String(hours);
+    case 'hh':
+      return pad(hours % 12 || 12, 2);
+    case 'h':
+      return String(hours % 12 || 12);
+    case 'mm':
+      return pad(date.getMinutes(), 2);
+    case 'm':
+      return String(date.getMinutes());
+    case 'ss':
+      return pad(date.getSeconds(), 2);
+    case 's':
+      return String(date.getSeconds());
+    case 'A':
+      return hours < 12 ? 'AM' : 'PM';
+    case 'a':
+      return hours < 12 ? 'am' : 'pm';
+    default:
+      return renderToken(token, date);
+  }
+}
+
+function formatTokens(
+  format: string,
+  date: Date,
+  tokens: readonly string[],
+  render: (token: string, date: Date) => string,
+): string {
   let out = '';
   let i = 0;
   while (i < format.length) {
@@ -83,9 +125,9 @@ export function formatDailyName(format: string, date: Date): string {
       i = close + 1;
       continue;
     }
-    const token = TOKENS.find((t) => format.startsWith(t, i));
+    const token = tokens.find((candidate) => format.startsWith(candidate, i));
     if (token !== undefined) {
-      out += renderToken(token, date);
+      out += render(token, date);
       i += token.length;
     } else {
       out += ch;
@@ -93,6 +135,14 @@ export function formatDailyName(format: string, date: Date): string {
     }
   }
   return out;
+}
+
+/**
+ * Moment-subset formatter: YYYY YY MMMM MMM MM M DD D dddd ddd, with
+ * [literal] bracket escapes. en-US names. Unknown characters pass through.
+ */
+export function formatDailyName(format: string, date: Date): string {
+  return formatTokens(format, date, TOKENS, renderToken);
 }
 
 interface DailyNotesConfig {
@@ -235,9 +285,9 @@ export async function getDailyNote(vault: Vault, date?: string): Promise<DailyNo
 
 /**
  * Render the {{...}} placeholders Obsidian's core templates use in daily
- * notes: {{title}}, {{date}}, {{time}} and {{date:FORMAT}} / {{time:FORMAT}}
- * (FORMAT in the same moment-subset as file names). Unknown placeholders are
- * left untouched — better visible than silently eaten.
+ * notes: {{title}}, {{date}}, {{time}} and {{date:FORMAT}} / {{time:FORMAT}}.
+ * Formatted time additionally supports H/HH, h/hh, m/mm, s/ss and A/a.
+ * Unknown placeholders are left untouched — better visible than silently eaten.
  */
 export function renderDailyTemplate(template: string, day: Date, title: string): string {
   const now = new Date();
@@ -251,7 +301,9 @@ export function renderDailyTemplate(template: string, day: Date, title: string):
         case 'date':
           return format !== undefined ? formatDailyName(format, day) : isoDay(day);
         case 'time':
-          return format !== undefined ? formatDailyName(format, now) : hhmm;
+          return format !== undefined
+            ? formatTokens(format.trim(), now, TEMPLATE_TIME_TOKENS, renderTemplateTimeToken)
+            : hhmm;
         default:
           return whole as string;
       }

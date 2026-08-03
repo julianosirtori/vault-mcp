@@ -23,7 +23,9 @@ export interface NoteContent {
   sizeBytes: number;
   /**
    * Short content hash identifying this version of the note on disk. Pass it
-   * back as expected_hash on a later write to detect concurrent edits.
+   * back as expected_hash on a later write to detect stale edits. The core
+   * revalidates immediately before replacement; unrelated filesystem writers
+   * can still race the final atomic rename.
    */
   hash: string;
 }
@@ -96,8 +98,9 @@ export interface NoteEdit {
 export interface WriteGuardOptions {
   /**
    * Hash from a previous read of this note. When set and the note on disk no
-   * longer matches, the write fails with CONFLICT instead of clobbering a
-   * change made elsewhere (e.g. on mobile, mid-conversation).
+   * longer matches when checked, the write fails with CONFLICT instead of
+   * clobbering a stale version. This is best-effort against unrelated external
+   * writers because portable filesystems do not provide content-based CAS.
    */
   expectedHash?: string;
 }

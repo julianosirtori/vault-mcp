@@ -132,7 +132,7 @@ function refuseUnsafeWrite(blocked: string[]): ToolOutcome {
 
 function renderNote(note: NoteContent): string {
   // The header carries the note's version hash so any later edit can pass it
-  // back as expected_hash; without it, concurrent edits are silently clobbered.
+  // back as expected_hash; without it, stale edits can be silently clobbered.
   const header = `[${cleanPath(note.path).path} | ${note.sizeBytes} bytes | version ${note.hash}]`;
   const body = renderRead(note.content);
   if (!note.truncated) return `${header}\n${body}`;
@@ -527,11 +527,11 @@ export function buildServer(vault: Vault): McpServer {
     return { text: lines.join('\n') };
   });
 
-  register<{ path: string; line: number; done_date?: string; expected_hash?: string }>(
+  register<{ path: string; line: number; done_date?: string; expected_hash: string }>(
     completeTaskContract,
     async ({ path, line, done_date, expected_hash }) => {
       const result = await completeTask(vault, path, line, done_date, {
-        ...(expected_hash !== undefined ? { expectedHash: expected_hash } : {}),
+        expectedHash: expected_hash,
       });
       const shownLine = sanitizeForModel(result.taskLine).content;
       if (result.alreadyDone) {
@@ -553,11 +553,11 @@ export function buildServer(vault: Vault): McpServer {
     },
   );
 
-  register<{ path: string; line: number; new_date: string; expected_hash?: string }>(
+  register<{ path: string; line: number; new_date: string; expected_hash: string }>(
     postponeTaskContract,
     async ({ path, line, new_date, expected_hash }) => {
       const result = await postponeTask(vault, path, line, new_date, {
-        ...(expected_hash !== undefined ? { expectedHash: expected_hash } : {}),
+        expectedHash: expected_hash,
       });
       const shownLine = sanitizeForModel(result.taskLine).content;
       const fromNote =
