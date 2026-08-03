@@ -1,0 +1,252 @@
+#!/usr/bin/env bash
+# infra/scripts/bootstrap — once per machine. Idempotent, non-interactive, no secrets.
+#
+# Root portion (EUID 0): system packages, Node 22, dedicated unprivileged user,
+#   linger — then re-execs the user portion as that user.
+# User portion: node/pnpm/cloudflared verification or install, directories,
+#   systemd USER units copied + enabled (never started; that is the boot's job).
+#
+# Every step is check-then-act: safe to re-run at any time.
+set -euo pipefail
+
+VAULT_MCP_USER="${VAULT_MCP_USER:-vaultmcp}"
+SCRIPT_PATH="$(readlink -f "${BASH_SOURCE[0]}")"
+SCRIPT_DIR="$(dirname "$SCRIPT_PATH")"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+
+log() { printf '[vault-mcp] %s\n' "$*"; }
+die() { printf '[vault-mcp] ERROR: %s\n' "$*" >&2; exit 1; }
+
+# ---------------------------------------------------------------- root portion
+
+install_system_deps() {
+  local missing=() dep
+  for dep in git curl jq; do
+    command -v "$dep" >/dev/null 2>&1 || missing+=("$dep")
+  done
+  if ((${#missing[@]} == 0)); then
+    log "system deps already present (git curl jq)"
+  else
+    log "installing system deps: ${missing[*]}"
+    if command -v apt-get >/dev/null 2>&1; then
+      DEBIAN_FRONTEND=noninteractive apt-get update -qq
+      DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "${missing[@]}"
+    elif command -v dnf >/dev/null 2>&1; then
+      dnf install -y -q "${missing[@]}"
+    else
+      die "no supported package manager (apt-get/dnf); install manually: ${missing[*]}"
+    fi
+  fi
+  # Xvfb is OPTIONAL: only needed when the sync client is the official
+  # Obsidian CLI, which drives the Electron app under a virtual display.
+  if ! command -v Xvfb >/dev/null 2>&1; then
+    log "note: Xvfb not installed (optional; only needed for the official Obsidian CLI sync client — apt-get/dnf install xvfb)"
+  fi
+}
+
+node_major() {
+  node -p 'process.versions.node.split(".")[0]' 2>/dev/null || echo 0
+}
+
+install_node_root() {
+  if command -v node >/dev/null 2>&1 && [[ "$(node_major)" -ge 22 ]]; then
+    log "node $(node --version) already present"
+    return
+  fi
+  # System package via NodeSource (https://github.com/nodesource/distributions).
+  log "installing Node 22 (NodeSource system package)"
+  if command -v apt-get >/dev/null 2>&1; then
+    curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
+    DEBIAN_FRONTEND=noninteractive apt-get install -y -qq nodejs
+  elif command -v dnf >/dev/null 2>&1; then
+    curl -fsSL https://rpm.nodesource.com/setup_22.x | bash -
+    dnf install -y -q nodejs
+  else
+    die "cannot install Node 22 automatically; install Node >= 22 and re-run"
+  fi
+}
+
+ensure_user() {
+  if id -u "$VAULT_MCP_USER" >/dev/null 2>&1; then
+    log "user $VAULT_MCP_USER already exists"
+  else
+    log "creating unprivileged user $VAULT_MCP_USER"
+    useradd --create-home --shell /bin/bash "$VAULT_MCP_USER"
+  fi
+  if [[ -e "/var/lib/systemd/linger/$VAULT_MCP_USER" ]]; then
+    log "linger already enabled for $VAULT_MCP_USER"
+  else
+    # Without linger, user services stop when the session ends — and never
+    # start at boot. This is what makes "reboot needs zero intervention" true.
+    log "enabling linger for $VAULT_MCP_USER"
+    loginctl enable-linger "$VAULT_MCP_USER"
+  fi
+}
+
+reexec_user_portion() {
+  local uid
+  uid="$(id -u "$VAULT_MCP_USER")"
+
+  if ! runuser -u "$VAULT_MCP_USER" -- test -r "$SCRIPT_PATH"; then
+    die "repo at $REPO_ROOT is not readable by $VAULT_MCP_USER — clone it under that user's home (e.g. /home/$VAULT_MCP_USER/vault-mcp) and re-run"
+  fi
+
+  # Linger starts the per-user systemd instance; wait for its runtime dir.
+  systemctl start "user@$uid.service" 2>/dev/null || true
+  for _ in {1..20}; do
+    [[ -d "/run/user/$uid" ]] && break
+    sleep 0.5
+  done
+  [[ -d "/run/user/$uid" ]] || die "user manager for $VAULT_MCP_USER did not come up (/run/user/$uid missing); re-run bootstrap"
+
+  log "re-executing user portion as $VAULT_MCP_USER"
+  runuser -u "$VAULT_MCP_USER" -- env \
+    XDG_RUNTIME_DIR="/run/user/$uid" \
+    DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$uid/bus" \
+    VAULT_MCP_USER="$VAULT_MCP_USER" \
+    bash "$SCRIPT_PATH" --user-portion
+}
+
+root_portion() {
+  install_system_deps
+  install_node_root
+  ensure_user
+  reexec_user_portion
+}
+
+# ---------------------------------------------------------------- user portion
+
+verify_node() {
+  command -v node >/dev/null 2>&1 || die "node not found — run bootstrap as root first (it installs Node 22)"
+  [[ "$(node_major)" -ge 22 ]] || die "Node >= 22 required, found $(node --version)"
+  log "node $(node --version) ok"
+}
+
+ensure_pnpm() {
+  if command -v pnpm >/dev/null 2>&1; then
+    log "pnpm $(pnpm --version) already present"
+    return
+  fi
+  command -v corepack >/dev/null 2>&1 || die "corepack not found (ships with Node 22); reinstall Node and re-run"
+  log "enabling pnpm via corepack"
+  if ! corepack enable pnpm 2>/dev/null; then
+    # Node's bin dir is not writable by this user; fall back to ~/.local/bin.
+    mkdir -p "$HOME/.local/bin"
+    corepack enable --install-directory "$HOME/.local/bin" pnpm
+  fi
+}
+
+ensure_cloudflared() {
+  mkdir -p "$HOME/.local/bin"
+  if [[ -x "$HOME/.local/bin/cloudflared" ]]; then
+    log "cloudflared already at ~/.local/bin/cloudflared"
+    return
+  fi
+  if command -v cloudflared >/dev/null 2>&1; then
+    # vault-tunnel.service runs %h/.local/bin/cloudflared, so guarantee it there.
+    ln -sf "$(command -v cloudflared)" "$HOME/.local/bin/cloudflared"
+    log "linked system cloudflared into ~/.local/bin"
+    return
+  fi
+  # Official static binary from Cloudflare's GitHub releases:
+  # https://github.com/cloudflare/cloudflared/releases
+  local arch
+  case "$(uname -m)" in
+    x86_64)  arch=amd64 ;;
+    aarch64) arch=arm64 ;;
+    *) die "unsupported arch $(uname -m); install cloudflared manually into ~/.local/bin" ;;
+  esac
+  log "downloading cloudflared (linux-$arch) from GitHub releases"
+  curl -fsSL -o "$HOME/.local/bin/cloudflared.tmp" \
+    "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-$arch"
+  chmod +x "$HOME/.local/bin/cloudflared.tmp"
+  mv "$HOME/.local/bin/cloudflared.tmp" "$HOME/.local/bin/cloudflared"
+  log "installed $("$HOME/.local/bin/cloudflared" --version 2>/dev/null | head -n 1)"
+}
+
+ensure_dirs() {
+  local d
+  for d in "$HOME/vault" "$HOME/.config/vault-mcp" "$HOME/.local/state/vault-mcp" \
+           "$HOME/.config/systemd/user" "$HOME/.local/bin"; do
+    if [[ -d "$d" ]]; then
+      log "dir ok: $d"
+    else
+      mkdir -p "$d"
+      log "created $d"
+    fi
+  done
+  chmod 700 "$HOME/.config/vault-mcp"
+}
+
+link_scripts() {
+  # Units use %h paths only, so they call these fixed names instead of
+  # assuming where the repo was cloned.
+  local name
+  for name in start doctor autocommit; do
+    ln -sf "$SCRIPT_DIR/$name" "$HOME/.local/bin/vault-mcp-$name"
+  done
+  log "linked start/doctor/autocommit as ~/.local/bin/vault-mcp-*"
+}
+
+install_units() {
+  local unit dest
+  for unit in "$REPO_ROOT"/infra/systemd/*.service "$REPO_ROOT"/infra/systemd/*.timer; do
+    dest="$HOME/.config/systemd/user/$(basename "$unit")"
+    if [[ -f "$dest" ]] && cmp -s "$unit" "$dest"; then
+      log "unit up to date: $(basename "$unit")"
+    else
+      install -m 644 "$unit" "$dest"
+      log "installed unit $(basename "$unit")"
+    fi
+  done
+
+  systemctl --user daemon-reload
+
+  # Enable, NOT start: on a fresh machine configure has not run yet and the
+  # services would only crash-loop. The next boot (or the operator, after
+  # configure) starts them.
+  local u
+  for u in vault-sync.service vault-mcp.service vault-tunnel.service \
+           vault-autocommit.service vault-autocommit.timer; do
+    if systemctl --user is-enabled --quiet "$u" 2>/dev/null; then
+      log "already enabled: $u"
+    else
+      systemctl --user enable --quiet "$u"
+      log "enabled $u"
+    fi
+  done
+}
+
+user_portion() {
+  export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+  export DBUS_SESSION_BUS_ADDRESS="${DBUS_SESSION_BUS_ADDRESS:-unix:path=$XDG_RUNTIME_DIR/bus}"
+
+  verify_node
+  ensure_pnpm
+  ensure_cloudflared
+  ensure_dirs
+  link_scripts
+  install_units
+
+  log "bootstrap complete. Next: run infra/scripts/configure as $VAULT_MCP_USER (the only interactive step)."
+}
+
+# -------------------------------------------------------------------------- main
+
+main() {
+  local mode="${1:-}"
+  if [[ "$mode" == "--user-portion" ]]; then
+    user_portion
+    return
+  fi
+  if [[ "$EUID" -eq 0 ]]; then
+    root_portion
+  elif [[ "$(id -un)" == "$VAULT_MCP_USER" ]]; then
+    log "running as $VAULT_MCP_USER without root — user portion only (root portion assumed done)"
+    user_portion
+  else
+    die "run as root (sudo $0) for machine setup, or as user '$VAULT_MCP_USER' to redo the user portion"
+  fi
+}
+
+main "$@"

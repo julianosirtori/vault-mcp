@@ -1,0 +1,26 @@
+{
+  "name": "@vault-mcp/server",
+  "version": "0.1.0",
+  "private": true,
+  "description": "MCP server over streamable HTTP, executing vault tools on the origin VPS.",
+  "type": "module",
+  "bin": {
+    "vault-mcp-server": "./dist/main.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "@vault-mcp/core": "workspace:*",
+    "@vault-mcp/guards": "workspace:*",
+    "@vault-mcp/tool-contract": "workspace:*",
+    "zod": "^4.4.3"
+  }
+}

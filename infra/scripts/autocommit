@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+# infra/scripts/autocommit — the recovery path that makes "worst case is junk
+# in a note" true. Commits any dirty state in the vault to local git history.
+# NEVER pushes: history stays local; remotes are the owner's call.
+# Run by vault-autocommit.timer every 30 minutes (and once at boot).
+set -euo pipefail
+
+log() { printf '[vault-mcp] autocommit: %s\n' "$*"; }
+die() { printf '[vault-mcp] autocommit: %s\n' "$*" >&2; exit 1; }
+
+if [[ -z "${VAULT_PATH:-}" ]]; then
+  ENV_FILE="${VAULT_MCP_ENV_FILE:-$HOME/.config/vault-mcp/env}"
+  [[ -f "$ENV_FILE" ]] || die "VAULT_PATH unset and env file missing: $ENV_FILE — run infra/scripts/configure"
+  set -a
+  # shellcheck source=/dev/null
+  source "$ENV_FILE"
+  set +a
+fi
+
+[[ -n "${VAULT_PATH:-}" ]] || die "VAULT_PATH is empty"
+[[ -d "$VAULT_PATH" ]] || die "vault dir missing: $VAULT_PATH"
+cd "$VAULT_PATH"
+[[ -d .git ]] || die "$VAULT_PATH is not a git repo — run infra/scripts/configure"
+
+if [[ -z "$(git status --porcelain)" ]]; then
+  log "clean — nothing to commit"
+  exit 0
+fi
+
+git add -A
+
+identity=()
+if ! git config user.email >/dev/null 2>&1; then
+  identity=(-c user.name="vault-mcp autocommit" -c user.email="vault-mcp@localhost")
+fi
+git "${identity[@]}" commit -q -m "auto: $(date -Is)"
+log "committed $(git rev-parse --short HEAD)"

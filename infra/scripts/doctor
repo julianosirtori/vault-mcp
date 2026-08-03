@@ -1,0 +1,152 @@
+#!/usr/bin/env bash
+# infra/scripts/doctor — first command when something doesn't answer.
+#
+# Prints one line per check: "ok|FAIL name — detail" (plus WARN for the
+# stale-sync heuristic). Exits non-zero if any check FAILed. Read-only.
+set -euo pipefail
+
+ENV_FILE="${VAULT_MCP_ENV_FILE:-$HOME/.config/vault-mcp/env}"
+SYNC_WARN_SECS=$((6 * 3600))
+FAILURES=0
+
+ok()    { printf 'ok   %s — %s\n' "$1" "$2"; }
+fail_() { printf 'FAIL %s — %s\n' "$1" "$2"; FAILURES=$((FAILURES + 1)); }
+warn()  { printf 'WARN %s — %s\n' "$1" "$2"; }
+
+fmt_age() { # seconds -> human
+  local s="$1"
+  if   (( s < 60 ));    then printf '%ds' "$s"
+  elif (( s < 3600 ));  then printf '%dm' $((s / 60))
+  elif (( s < 86400 )); then printf '%dh%02dm' $((s / 3600)) $(((s % 3600) / 60))
+  else                       printf '%dd%02dh' $((s / 86400)) $(((s % 86400) / 3600))
+  fi
+}
+
+now="$(date +%s)"
+
+# --- units active ------------------------------------------------------------
+for unit in vault-sync vault-mcp vault-tunnel; do
+  if systemctl --user is-active --quiet "$unit.service" 2>/dev/null; then
+    ok "unit:$unit" "active"
+  else
+    state="$(systemctl --user is-active "$unit.service" 2>/dev/null || true)"
+    fail_ "unit:$unit" "state=${state:-unknown} (try: journalctl --user -u $unit.service -n 30)"
+  fi
+done
+
+# --- env file ----------------------------------------------------------------
+if [[ -f "$ENV_FILE" ]]; then
+  ok "env-file" "$ENV_FILE"
+  set -a
+  # shellcheck source=/dev/null
+  source "$ENV_FILE"
+  set +a
+else
+  fail_ "env-file" "missing: $ENV_FILE — run infra/scripts/configure"
+fi
+
+VAULT_PATH="${VAULT_PATH:-$HOME/vault}"
+MCP_PORT="${MCP_PORT:-9820}"
+
+# --- vault dir + most recent write ------------------------------------------
+newest_mtime=""
+if [[ -d "$VAULT_PATH" ]]; then
+  newest_mtime="$(find "$VAULT_PATH" -name .git -prune -o -type f -printf '%T@\n' 2>/dev/null \
+    | awk 'BEGIN{m=0} $1>m{m=$1} END{if (m>0) printf "%d\n", m}')"
+  if [[ -n "$newest_mtime" ]]; then
+    ok "vault-dir" "$VAULT_PATH (most recent write $(fmt_age $((now - newest_mtime))) ago)"
+  else
+    ok "vault-dir" "$VAULT_PATH (empty — no files yet)"
+  fi
+else
+  fail_ "vault-dir" "missing: $VAULT_PATH — sync never ran, or wrong VAULT_PATH in $ENV_FILE"
+fi
+
+# --- MCP server healthz ------------------------------------------------------
+if [[ -n "${ORIGIN_SECRET:-}" ]]; then
+  if out="$(curl -fsS -m 5 -H "x-origin-secret: $ORIGIN_SECRET" \
+      "http://127.0.0.1:$MCP_PORT/healthz" 2>&1)"; then
+    ok "healthz" "server answered on 127.0.0.1:$MCP_PORT"
+  else
+    fail_ "healthz" "no answer on 127.0.0.1:$MCP_PORT — ${out//$'\n'/ }"
+  fi
+else
+  fail_ "healthz" "ORIGIN_SECRET unset; cannot probe — run infra/scripts/configure"
+fi
+
+# --- tunnel connection state -------------------------------------------------
+# cloudflared's /ready returns 200 only while it holds live connections to the
+# edge. The metrics address comes from tunnel.yml (see config.yml.example).
+METRICS="${CLOUDFLARED_METRICS:-127.0.0.1:9821}"
+if curl -fsS -m 5 "http://$METRICS/ready" >/dev/null 2>&1; then
+  ok "tunnel" "cloudflared /ready on $METRICS reports live edge connections"
+else
+  fail_ "tunnel" "cloudflared not ready on $METRICS (needs 'metrics: $METRICS' in ~/.config/vault-mcp/tunnel.yml)"
+fi
+
+# --- autocommit timer --------------------------------------------------------
+# Checked separately from git-history on purpose: a vault whose timer died
+# weeks ago still has a repo and still has commits, so git-history stays green
+# while the undo history quietly stops growing. Autocommit is what makes
+# "worst case is junk in a note" true, and its silent death is exactly the
+# failure class doctor exists to catch.
+if systemctl --user is-active --quiet vault-autocommit.timer 2>/dev/null; then
+  ok "timer:autocommit" "vault-autocommit.timer active (vault snapshots every 30 min)"
+  # A live timer whose service fails every run is the same outcome as a dead
+  # timer, so the last run's result is part of the same question.
+  run_result="$(systemctl --user show vault-autocommit.service -p Result --value 2>/dev/null || true)"
+  if [[ -z "$run_result" || "$run_result" == "success" ]]; then
+    ok "autocommit-run" "last vault-autocommit.service run: ${run_result:-none yet}"
+  else
+    fail_ "autocommit-run" "last vault-autocommit.service run: $run_result — snapshots are failing (journalctl --user -u vault-autocommit.service -n 30)"
+  fi
+else
+  state="$(systemctl --user is-active vault-autocommit.timer 2>/dev/null || true)"
+  fail_ "timer:autocommit" "state=${state:-unknown} — the vault is no longer being snapshotted, so there is no undo history for anything written since it stopped (systemctl --user start vault-autocommit.timer; systemctl --user list-timers)"
+fi
+
+# --- git recovery history ----------------------------------------------------
+if [[ -d "$VAULT_PATH/.git" ]]; then
+  last_commit="$(git -C "$VAULT_PATH" log -1 --format=%ct 2>/dev/null || true)"
+  if [[ -n "$last_commit" ]]; then
+    # Age is reported, never FAILed on: autocommit only commits when the vault
+    # is dirty, so an old last commit on a quiet vault is normal. Whether
+    # snapshotting still works is the timer:autocommit check above.
+    ok "git-history" "last commit $(fmt_age $((now - last_commit))) ago"
+  else
+    fail_ "git-history" "vault repo has no commits — run infra/scripts/configure"
+  fi
+else
+  fail_ "git-history" "$VAULT_PATH is not a git repo — run infra/scripts/configure"
+fi
+
+# --- last successful sync ----------------------------------------------------
+# "Everything looks alive but content frozen in time" is the most likely
+# silent failure, so stale content WARNs even when every unit is green.
+sync_ts="$newest_mtime"
+sync_src="newest file mtime"
+if [[ -z "$sync_ts" ]]; then
+  ts="$(journalctl --user -u vault-sync.service -n 1 -o json 2>/dev/null \
+    | jq -r '.__REALTIME_TIMESTAMP // empty' 2>/dev/null || true)"
+  if [[ "$ts" =~ ^[0-9]+$ ]]; then
+    sync_ts=$((ts / 1000000))
+    sync_src="sync unit journal"
+  fi
+fi
+if [[ -n "$sync_ts" ]]; then
+  age=$((now - sync_ts))
+  if (( age > SYNC_WARN_SECS )); then
+    warn "sync-freshness" "last sync evidence ($sync_src) $(fmt_age "$age") ago (>6h) — content may be frozen; check: journalctl --user -u vault-sync.service"
+  else
+    ok "sync-freshness" "last sync evidence ($sync_src) $(fmt_age "$age") ago"
+  fi
+else
+  warn "sync-freshness" "no evidence of any sync yet (no vault files, no sync journal)"
+fi
+
+# ----------------------------------------------------------------------------
+if (( FAILURES > 0 )); then
+  printf '[vault-mcp] doctor: %d check(s) FAILED\n' "$FAILURES" >&2
+  exit 1
+fi
+printf '[vault-mcp] doctor: all checks passed\n'

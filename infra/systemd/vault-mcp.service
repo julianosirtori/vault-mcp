@@ -1,0 +1,33 @@
+# vault-mcp: MCP origin server — executes the tools against the vault on disk.
+# systemd USER unit (installed to ~/.config/systemd/user/ by bootstrap).
+
+[Unit]
+Description=vault-mcp MCP origin server
+# No ordering against network-online.target: it does not exist in the user
+# manager (it would be silently ignored), and the server binds 127.0.0.1 —
+# it needs no network to come up at all.
+# Weak dependency ON PURPOSE — Wants=, not Requires=, and no After= ordering
+# against vault-sync.service: the server must come up and serve the notes
+# already on disk even when sync is broken. Possibly-stale notes are far
+# better than a dead connector, and a hard binding would let a sync
+# credential failure take down functionality that does not depend on it.
+Wants=vault-sync.service
+# Never give up; growing backoff below handles persistent failure.
+StartLimitIntervalSec=0
+
+[Service]
+EnvironmentFile=-%h/.config/vault-mcp/env
+# The start script (symlinked by bootstrap) validates preconditions and
+# exec's node; on failure it prints one clear line so journalctl diagnosis
+# is instant. The leading '-' on EnvironmentFile lets that script report a
+# missing env file itself instead of systemd failing opaquely.
+ExecStart=%h/.local/bin/vault-mcp-start
+Restart=always
+RestartSec=5
+# Growing backoff (systemd >= 254); older systemd ignores these and keeps
+# the flat RestartSec=5.
+RestartSteps=8
+RestartMaxDelaySec=10min
+
+[Install]
+WantedBy=default.target

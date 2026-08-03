@@ -1,0 +1,16 @@
+{
+  "name": "@vault-mcp/core",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Vault access core: path validation, atomic writes, search. Knows nothing about MCP.",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ]
+}

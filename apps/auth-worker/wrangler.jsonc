@@ -1,0 +1,87 @@
+// wrangler.jsonc — EXAMPLE configuration for @vault-mcp/auth-worker.
+//
+// Everything in here is a placeholder. Nothing in this file is a secret, and
+// no real value is committed: KV namespace IDs are created per deployment
+// (`wrangler kv namespace create OAUTH_KV`) and secrets are NEVER put in this
+// file — they are set with `wrangler secret put <NAME>` (see README.md).
+{
+  // Worker name as it appears in the Cloudflare dashboard. Pick your own.
+  "name": "vault-mcp-auth-worker",
+
+  // Entry module. The OAuthProvider instance is the default export.
+  "main": "src/index.ts",
+
+  // Any recent date is fine; pin it and bump deliberately.
+  "compatibility_date": "2026-08-01",
+
+  // REQUIRED: `clientIdMetadataDocumentEnabled: true` in src/index.ts makes
+  // the OAuth library fetch URL-formatted client_ids as Client ID Metadata
+  // Documents, and the library requires this flag for those outbound fetches
+  // (it restricts them to strictly public IPs, preventing SSRF into your
+  // own infrastructure).
+  "compatibility_flags": ["global_fetch_strictly_public"],
+
+  // ---------------------------------------------------------------------------
+  // KV
+  // ---------------------------------------------------------------------------
+  "kv_namespaces": [
+    {
+      // The binding name MUST be exactly OAUTH_KV — the OAuth library looks
+      // it up by this name. It stores: client registrations, grants (props
+      // end-to-end encrypted, token secrets only as hashes), access/refresh
+      // token records, and this Worker's consent attempt-limiting counters
+      // (`consent-attempts:<ip>`). It never stores vault content.
+      "binding": "OAUTH_KV",
+      // Placeholder — replace with the id printed by:
+      //   wrangler kv namespace create OAUTH_KV
+      "id": "<YOUR_KV_NAMESPACE_ID>"
+    }
+  ],
+
+  // ---------------------------------------------------------------------------
+  // Plain vars (visible in the dashboard and in this file — NOT secrets)
+  // ---------------------------------------------------------------------------
+  "vars": {
+    // Tunnel hostname of the origin (scheme + host only, no path). The
+    // Worker forwards authenticated /mcp requests to `${ORIGIN_URL}/mcp`.
+    // This is not a secret: the origin answers 404 to anything that does not
+    // carry the x-origin-secret header, so knowing the hostname gains nothing.
+    "ORIGIN_URL": "https://<your-tunnel-hostname.example.com>",
+
+    // SECURITY CORE — comma-separated list of EXACT redirect_uri values that
+    // are allowed to complete the authorization flow. Dynamic client
+    // registration is open by spec, so an attacker can register a client
+    // whose redirect points at their own domain; this allowlist is what makes
+    // that registration useless. Exact string match, no wildcards, no
+    // prefixes. The two values below cover Claude (web/desktop/mobile):
+    "REDIRECT_ALLOWLIST": "https://claude.ai/api/mcp/auth_callback,https://claude.com/api/mcp/auth_callback"
+  },
+
+  // ---------------------------------------------------------------------------
+  // Secrets — NOT in this file. Set each one with:
+  //   wrangler secret put ORIGIN_SECRET
+  //   wrangler secret put CONSENT_PASSWORD
+  //
+  // ORIGIN_SECRET     Shared secret attached as `x-origin-secret` to every
+  //                   request forwarded to the origin. The origin refuses
+  //                   (404) requests without it. Generate high-entropy, e.g.:
+  //                     openssl rand -base64 32
+  //                   Must match the value configured on the origin.
+  //
+  // CONSENT_PASSWORD  High-entropy credential typed on the /authorize consent
+  //                   page. This is the human gate in front of every grant.
+  //                   Generate it, store it in your password manager; you
+  //                   type it roughly once per client authorization.
+  //
+  // COOKIE_SECRET     Listed in SPEC.md "if the library needs one for signed
+  //                   state". @cloudflare/workers-oauth-provider 0.8.3 keeps
+  //                   ALL OAuth state in KV and issues no signed cookies, so
+  //                   no such secret exists in its API. Intentionally omitted.
+  // ---------------------------------------------------------------------------
+
+  // Workers Logs: failures are logged to console with detail (the responses
+  // themselves stay minimal), so keep observability on to be able to read them.
+  "observability": {
+    "enabled": true
+  }
+}

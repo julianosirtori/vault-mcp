@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# infra/scripts/start — every boot and every restart. Non-interactive, writes nothing.
+#
+# Single entrypoint used by vault-mcp.service. Validates preconditions, then
+# exec's the server. Any failure prints ONE clear line to stderr and exits 1;
+# systemd restarts with backoff and the line makes journalctl diagnosis instant.
+# Never authenticates, never writes configuration, never prompts.
+set -euo pipefail
+
+fail() { printf '[vault-mcp] start: %s\n' "$*" >&2; exit 1; }
+
+ENV_FILE="${VAULT_MCP_ENV_FILE:-$HOME/.config/vault-mcp/env}"
+
+[[ -f "$ENV_FILE" ]] || fail "env file missing: $ENV_FILE — run infra/scripts/configure once"
+
+set -a
+# shellcheck source=/dev/null
+source "$ENV_FILE"
+set +a
+
+[[ -n "${VAULT_PATH:-}" ]] || fail "VAULT_PATH is empty in $ENV_FILE — re-run infra/scripts/configure"
+[[ -d "$VAULT_PATH" ]] || fail "VAULT_PATH is not a directory: $VAULT_PATH — check the sync client / re-run configure"
+[[ -n "${ORIGIN_SECRET:-}" ]] || fail "ORIGIN_SECRET is empty in $ENV_FILE — re-run infra/scripts/configure"
+command -v node >/dev/null 2>&1 || fail "node not found in PATH — run infra/scripts/bootstrap"
+[[ -n "${VAULT_MCP_HOME:-}" ]] || fail "VAULT_MCP_HOME is empty in $ENV_FILE — re-run infra/scripts/configure"
+
+MAIN_JS="$VAULT_MCP_HOME/apps/mcp-server/dist/main.js"
+[[ -f "$MAIN_JS" ]] || fail "server build missing: $MAIN_JS — run 'pnpm install && pnpm build' in $VAULT_MCP_HOME"
+
+exec node "$MAIN_JS"

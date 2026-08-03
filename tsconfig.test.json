@@ -1,0 +1,24 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "composite": false,
+    "declaration": false,
+    "declarationMap": false,
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "types": ["node"],
+    "baseUrl": ".",
+    "paths": {
+      "@vault-mcp/core": ["packages/vault-core/src/index.ts"],
+      "@vault-mcp/guards": ["packages/vault-guards/src/index.ts"],
+      "@vault-mcp/tool-contract": ["packages/tool-contract/src/index.ts"]
+    }
+  },
+  "include": [
+    "packages/*/src/**/*.ts",
+    "packages/*/test/**/*.ts",
+    "apps/mcp-server/src/**/*.ts",
+    "apps/mcp-server/test/**/*.ts"
+  ]
+}

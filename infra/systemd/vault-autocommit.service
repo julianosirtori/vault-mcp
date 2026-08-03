@@ -1,0 +1,16 @@
+# vault-mcp: periodic git autocommit — the local recovery history that makes
+# "worst case is junk in a note" true. Triggered by vault-autocommit.timer;
+# also runs once at boot (WantedBy=default.target) to capture anything left
+# dirty by a crash or reboot. Never pushes.
+# systemd USER unit (installed to ~/.config/systemd/user/ by bootstrap).
+
+[Unit]
+Description=vault-mcp vault autocommit (local git recovery history)
+
+[Service]
+Type=oneshot
+EnvironmentFile=-%h/.config/vault-mcp/env
+ExecStart=%h/.local/bin/vault-mcp-autocommit
+
+[Install]
+WantedBy=default.target

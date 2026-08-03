@@ -1,0 +1,14 @@
+# vault-mcp: fires vault-autocommit.service every 30 minutes.
+# systemd USER unit (installed to ~/.config/systemd/user/ by bootstrap).
+
+[Unit]
+Description=vault-mcp autocommit every 30 minutes
+
+[Timer]
+OnCalendar=*:0/30
+# Catch up after downtime: if the machine was off when a tick was due, run
+# once right after boot instead of waiting for the next slot.
+Persistent=true
+
+[Install]
+WantedBy=timers.target

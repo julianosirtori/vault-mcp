@@ -1,0 +1,30 @@
+# vault-mcp: cloudflared tunnel — outbound-only exposure of the origin to the
+# edge Worker. No inbound port is ever opened on this machine.
+# systemd USER unit (installed to ~/.config/systemd/user/ by bootstrap).
+
+[Unit]
+Description=vault-mcp cloudflared tunnel (outbound-only exposure)
+# Ordering preference only: start after the server so the tunnel does not
+# briefly route to a connection-refused origin at boot. Not a hard binding —
+# the tunnel keeps running (and retrying) even if the server is down.
+# No network-online.target here either: absent from the user manager, so it
+# would be an ignored line. cloudflared's own reconnect plus the restart
+# backoff below is what covers a network that comes up late.
+After=vault-mcp.service
+# Never give up; growing backoff below handles persistent failure.
+StartLimitIntervalSec=0
+
+[Service]
+# bootstrap guarantees %h/.local/bin/cloudflared (download or symlink to a
+# system install). tunnel.yml is the filled-in copy of
+# infra/tunnel/config.yml.example.
+ExecStart=%h/.local/bin/cloudflared tunnel --config %h/.config/vault-mcp/tunnel.yml run
+Restart=always
+RestartSec=5
+# Growing backoff (systemd >= 254); older systemd ignores these and keeps
+# the flat RestartSec=5.
+RestartSteps=8
+RestartMaxDelaySec=10min
+
+[Install]
+WantedBy=default.target

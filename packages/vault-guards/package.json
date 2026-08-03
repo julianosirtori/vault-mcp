@@ -1,0 +1,16 @@
+{
+  "name": "@vault-mcp/guards",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Input/output sanitization and warn-only heuristics for vault content.",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ]
+}

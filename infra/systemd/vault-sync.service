@@ -1,0 +1,30 @@
+# vault-mcp: sync client — keeps the vault in step with Obsidian Sync.
+# systemd USER unit (installed to ~/.config/systemd/user/ by bootstrap).
+
+[Unit]
+Description=vault-mcp sync client (keeps the vault current)
+# Deliberately NO ordering against network-online.target: that target exists
+# only in the system manager, so in a USER manager the dependency is silently
+# ignored — it would be a comment pretending to be a guarantee. What actually
+# handles "the network isn't up yet at boot" here is the restart policy below:
+# the client fails fast, systemd retries, the backoff grows, sync starts as
+# soon as the network answers.
+# NEVER give up: the sync client exits after prolonged network loss, and a
+# policy that stops retrying leaves sync silently dead for weeks. No start
+# limit — restart attempts continue forever, with growing backoff below.
+StartLimitIntervalSec=0
+
+[Service]
+# One-line wrapper around the user-supplied sync command, written by
+# infra/scripts/configure. Must run in the foreground and sync bidirectionally.
+ExecStart=%h/.config/vault-mcp/sync-command
+Restart=always
+RestartSec=5
+# Growing backoff between retries: 5s stepping up to 10min over 8 restarts
+# (systemd >= 254). Older systemd warns on the unknown settings, ignores
+# them, and keeps the flat RestartSec=5 — still never gives up.
+RestartSteps=8
+RestartMaxDelaySec=10min
+
+[Install]
+WantedBy=default.target

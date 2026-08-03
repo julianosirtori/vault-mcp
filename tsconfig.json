@@ -1,0 +1,9 @@
+{
+  "files": [],
+  "references": [
+    { "path": "packages/vault-core" },
+    { "path": "packages/vault-guards" },
+    { "path": "packages/tool-contract" },
+    { "path": "apps/mcp-server" }
+  ]
+}

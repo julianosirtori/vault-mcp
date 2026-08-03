@@ -1,0 +1,19 @@
+{
+  "name": "@vault-mcp/tool-contract",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Tool schemas and descriptions shared between server and clients. A product artifact: descriptions drive when the model reaches for the vault.",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "dependencies": {
+    "zod": "^4.4.3"
+  }
+}

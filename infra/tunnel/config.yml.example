@@ -1,0 +1,33 @@
+# cloudflared named-tunnel configuration — vault-mcp origin.
+#
+# Copy to ~/.config/vault-mcp/tunnel.yml, then replace the UUID placeholders
+# with the ID printed by:
+#   cloudflared tunnel login
+#   cloudflared tunnel create vault-mcp
+#
+# Exposure is OUTBOUND-ONLY: cloudflared dials out to Cloudflare's edge and
+# holds those connections open; requests flow back down them. No inbound port
+# is opened on this machine, nothing listens on a public interface, and the
+# MCP server itself stays bound to 127.0.0.1 — reachable exclusively through
+# this tunnel, and answering 404 without the Worker's x-origin-secret header.
+
+# Tunnel UUID from `cloudflared tunnel create vault-mcp`.
+tunnel: 00000000-0000-0000-0000-000000000000
+
+# Credentials JSON written by `cloudflared tunnel create`. Keep it under
+# ~/.config/vault-mcp/ with the rest of the local state, and use the absolute
+# path — cloudflared does not expand `~`.
+credentials-file: /home/vaultmcp/.config/vault-mcp/00000000-0000-0000-0000-000000000000.json
+
+# Local-only metrics endpoint. infra/scripts/doctor probes /ready here to
+# verify the tunnel holds live connections to the edge (override the address
+# for doctor via CLOUDFLARED_METRICS if you change it).
+metrics: 127.0.0.1:9821
+
+ingress:
+  # Single rule: the public hostname routed to this tunnel in Cloudflare DNS,
+  # forwarded to the MCP server on loopback (MCP_PORT, default 9820).
+  - hostname: vault-mcp.example.com
+    service: http://127.0.0.1:9820
+  # Catch-all: anything else that reaches the tunnel gets a plain 404.
+  - service: http_status:404

@@ -1,0 +1,16 @@
+{
+  "name": "@vault-mcp/auth-worker",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Cloudflare Worker at the edge: OAuth 2.1 + authenticated proxy to the origin. Holds no vault content.",
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@cloudflare/workers-oauth-provider": "^0.8.3"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260801.1"
+  }
+}
