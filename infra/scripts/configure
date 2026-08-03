@@ -59,19 +59,22 @@ cat <<'EOT'
   ~/.config/vault-mcp/sync-command and run (and restarted forever) by
   vault-sync.service.
 
-  A known-working option is the official Obsidian CLI under a virtual
-  display (needs Xvfb), e.g.:
+  A known-working option is obsidian-headless, the official CLI, e.g.:
 
-      xvfb-run -a obsidian sync --vault MyVault
+      ob sync --path ~/vault --continuous
+
+  Name the vault path explicitly, as above: the wrapper runs with its
+  working directory at $HOME, not at the vault. A client left to default to
+  "the current directory" would target the home directory itself.
 
   FIRST, LINK THE CLIENT — do this now, by hand, in this terminal, before
   entering the command below. configure cannot do it for you: every client
   has its own login/pairing flow, and vault-sync.service runs unattended at
   boot with no terminal to answer a login prompt on.
 
-    - official Obsidian CLI: run it interactively under `xvfb-run -a` once
-      and complete the Obsidian Sync login, so the credentials are stored in
-      this user's home;
+    - obsidian-headless: `ob login`, then `ob sync-setup --vault "<name>"`
+      from inside the vault directory, so the credentials are stored in this
+      user's home. `ob sync-config` then confirms the mode is bidirectional;
     - any other syncer: run its own pairing/authorization step (Syncthing:
       accept the device + folder on both ends).
     - already linked, or a syncer that needs no login: nothing to do.
@@ -97,6 +100,40 @@ while [[ -z "$sync_cmd" ]]; do
   read -r -p "[vault-mcp] sync command${existing_cmd:+ [$existing_cmd]}: " sync_cmd
   sync_cmd="${sync_cmd:-$existing_cmd}"
 done
+
+# The command is executed by systemd, not by the shell it was typed into, and
+# the two disagree about PATH: the user manager's does not include
+# ~/.local/bin, which is exactly where a syncer installed by this user lands.
+# A name that resolves here fails there with "exec: <name>: not found"
+# (status 127) on every restart, forever, and the message says nothing about
+# PATH. Resolving it now turns a boot-time mystery into one line printed while
+# the operator is still watching.
+resolve_sync_bin() { # <command line> -> same line with an absolute argv[0]
+  local cmd="$1" prefix="" head rest resolved
+  # VAR=value assignments are legal in front of exec, and a syncer that needs
+  # one (a proxy, a log level) would otherwise be read as a missing binary.
+  while :; do
+    head="${cmd%% *}"
+    [[ "$cmd" == *" "* && "$head" == [A-Za-z_]*=* ]] || break
+    prefix+="$head "
+    cmd="${cmd#* }"
+  done
+  head="${cmd%% *}"
+  if [[ "$cmd" == *" "* ]]; then rest=" ${cmd#* }"; else rest=""; fi
+  if [[ "$head" == /* ]]; then printf '%s%s' "$prefix" "$cmd"; return 0; fi
+  resolved="$(command -v "$head" 2>/dev/null || true)"
+  # command -v also answers for builtins, functions and aliases, none of which
+  # exist inside the unit — insist on a real path.
+  [[ "$resolved" == /* ]] \
+    || die "sync command not found as an executable in PATH: $head (install it, or give an absolute path)"
+  printf '%s%s%s' "$prefix" "$resolved" "$rest"
+}
+
+resolved_cmd="$(resolve_sync_bin "$sync_cmd")"
+if [[ "$resolved_cmd" != "$sync_cmd" ]]; then
+  log "resolved '${sync_cmd%% *}' to '${resolved_cmd%% *}' (systemd's PATH excludes ~/.local/bin)"
+  sync_cmd="$resolved_cmd"
+fi
 
 {
   printf '#!/usr/bin/env bash\n'
@@ -130,6 +167,18 @@ reject_unquotable "vault path" "$vault_path"
 # The server refuses a relative VAULT_PATH; catching it here costs one line
 # instead of a crash-loop the operator has to read out of journalctl.
 [[ "$vault_path" == /* ]] || die "vault path must be absolute, got: $vault_path"
+
+# vault-sync.service sets no WorkingDirectory, so the wrapper runs from $HOME.
+# A syncer that defaults to "the current directory" therefore points at the
+# home directory — which holds this config, the tunnel credentials and the
+# checkout. That failure is silent and points the wrong way (it syncs, just
+# not what you meant), so say something while the answers are still on screen.
+if [[ "$sync_cmd" != *"$vault_path"* ]]; then
+  log "WARNING: the sync command does not mention $vault_path"
+  log "         it runs with the working directory at $HOME, not the vault — if the"
+  log "         client defaults to the current directory, name the vault explicitly"
+  log "         (e.g. --path $vault_path) by editing $SYNC_CMD_FILE"
+fi
 
 read -r -p "[vault-mcp] MCP port [9820]: " mcp_port
 mcp_port="${mcp_port:-9820}"
