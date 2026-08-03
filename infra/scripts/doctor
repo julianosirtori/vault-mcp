@@ -51,8 +51,15 @@ MCP_PORT="${MCP_PORT:-9820}"
 # --- vault dir + most recent write ------------------------------------------
 newest_mtime=""
 if [[ -d "$VAULT_PATH" ]]; then
+  # `|| true` is load-bearing under `set -euo pipefail`: 2>/dev/null hides
+  # find's complaints but not its exit status, and pipefail promotes that to
+  # the whole pipeline. find exits non-zero for reasons that are normal here —
+  # a file removed by the sync client mid-walk is the common one, since
+  # vault-sync runs continuously — and without this the entire script dies at
+  # this line, printing nothing and exiting 1. A diagnostic tool that goes
+  # silent exactly when the vault is busy is worse than no diagnostic tool.
   newest_mtime="$(find "$VAULT_PATH" -name .git -prune -o -type f -printf '%T@\n' 2>/dev/null \
-    | awk 'BEGIN{m=0} $1>m{m=$1} END{if (m>0) printf "%d\n", m}')"
+    | awk 'BEGIN{m=0} $1>m{m=$1} END{if (m>0) printf "%d\n", m}')" || true
   if [[ -n "$newest_mtime" ]]; then
     ok "vault-dir" "$VAULT_PATH (most recent write $(fmt_age $((now - newest_mtime))) ago)"
   else
@@ -136,7 +143,25 @@ fi
 if [[ -n "$sync_ts" ]]; then
   age=$((now - sync_ts))
   if (( age > SYNC_WARN_SECS )); then
-    warn "sync-freshness" "last sync evidence ($sync_src) $(fmt_age "$age") ago (>6h) — content may be frozen; check: journalctl --user -u vault-sync.service"
+    # An old newest-mtime has two very different causes: sync died, or nobody
+    # edited a note this week. Only the first is worth a warning, and warning
+    # on the second every single run is how an operator learns to stop reading
+    # doctor's output. Ask the client itself before deciding: a running unit
+    # that logged recently means the content is quiet, not frozen.
+    journal_ts="$(journalctl --user -u vault-sync.service -n 1 -o json 2>/dev/null \
+      | jq -r '.__REALTIME_TIMESTAMP // empty' 2>/dev/null || true)"
+    # `[[ … ]] && x=y` as a statement would abort the script under `set -e`
+    # whenever the test is false, which is the normal case here.
+    journal_age=""
+    if [[ "$journal_ts" =~ ^[0-9]+$ ]]; then
+      journal_age=$((now - journal_ts / 1000000))
+    fi
+    if [[ -n "$journal_age" ]] && (( journal_age <= SYNC_WARN_SECS )) \
+       && systemctl --user is-active --quiet vault-sync.service 2>/dev/null; then
+      ok "sync-freshness" "vault unchanged for $(fmt_age "$age"), but vault-sync is active and logged $(fmt_age "$journal_age") ago — quiet, not frozen"
+    else
+      warn "sync-freshness" "last sync evidence ($sync_src) $(fmt_age "$age") ago (>6h) — content may be frozen; check: journalctl --user -u vault-sync.service"
+    fi
   else
     ok "sync-freshness" "last sync evidence ($sync_src) $(fmt_age "$age") ago"
   fi
