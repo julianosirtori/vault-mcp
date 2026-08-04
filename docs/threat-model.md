@@ -85,9 +85,11 @@ Their job is to alert the owner, not to enforce anything.
   specification, so without this an attacker could register their own client
   with their own redirect URI and lure the owner into authorizing it on the
   legitimate domain. Because this is a single-user system, the allowlist can
-  simply be fixed to the real Claude callback URLs — which eliminates the
-  entire rogue-client class rather than mitigating it. Dynamic registration
-  itself stays enabled only for client compatibility.
+  simply be fixed to the real Claude callback URLs and the exact
+  connector-specific ChatGPT callback URL — which eliminates the entire
+  rogue-client class rather than mitigating it. ChatGPT callback IDs are not
+  wildcarded: a connector recreated with a new ID must be added explicitly.
+  Dynamic registration itself stays enabled only for client compatibility.
 - **Consent password**: high-entropy credential, compared in constant time
   (SHA-256 digests via `crypto.subtle`), attempt-limited at the edge (5 tries
   per 15 minutes per IP, then 429).

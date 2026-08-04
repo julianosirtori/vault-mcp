@@ -10,11 +10,10 @@
 > configuration changes, review the threat model before deployment, and do not
 > treat the current `main` branch as production-ready yet.
 
-A **remote MCP server for your Obsidian vault**. Add it once as a connector in
-Claude's settings and your notes become available in any conversation — on
-Claude web, iOS, Android or Desktop — with **no Obsidian desktop app required
-anywhere**. The server reads the markdown files directly from disk on a small
-VPS that stays in sync with your vault.
+A **remote MCP server for your Obsidian vault**. Add it as a connector in
+Claude or ChatGPT and your notes become available in conversations, with **no
+Obsidian desktop app required anywhere**. The server reads the markdown files
+directly from disk on a small VPS that stays in sync with your vault.
 
 Your vault stays a folder of markdown files. No database, no proprietary
 index, no custom format. If this project disappears tomorrow, your notes are
@@ -25,7 +24,7 @@ exactly where they were.
 Three zones with strictly separated responsibilities:
 
 ```
-        Claude web / iOS / Android / Desktop
+                  Claude / ChatGPT
                         │
                         │  MCP over HTTPS (OAuth 2.1 bearer token)
                         ▼
@@ -97,7 +96,7 @@ characters, the Unicode tag block). See the
 ## Getting started
 
 Follow [docs/setup.md](docs/setup.md) end to end: VPS bootstrap, sync client,
-tunnel, Worker deploy, and adding the connector in Claude's settings. There is
+tunnel, Worker deploy, and adding the connector in Claude or ChatGPT. There is
 also a local-only mode for trying the server on your own machine without any
 of the edge pieces.
 
