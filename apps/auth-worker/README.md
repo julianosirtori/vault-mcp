@@ -57,11 +57,20 @@ Edit `wrangler.jsonc`:
 - `ORIGIN_URL` — the tunnel hostname of your origin, scheme + host only
   (e.g. `https://vault-origin.example.com`). Not a secret.
 - `REDIRECT_ALLOWLIST` — comma-separated **exact** `redirect_uri` values
-  allowed to complete authorization. For Claude, keep:
+  allowed to complete authorization. Keep the Claude callbacks and add the
+  exact callback shown by ChatGPT when configuring the connector:
 
   ```
-  https://claude.ai/api/mcp/auth_callback,https://claude.com/api/mcp/auth_callback
+  https://claude.ai/api/mcp/auth_callback,https://claude.com/api/mcp/auth_callback,https://chatgpt.com/connector/oauth/<callback_id>
   ```
+
+  ChatGPT's `<callback_id>` is normally stable for that connector instance,
+  but it can change if the connector is deleted and recreated or another
+  connector is created. If it changes, authorization returns `403` until the
+  new exact callback is added and the Worker is redeployed. Do not replace it
+  with a wildcard. The legacy callback
+  `https://chatgpt.com/connector_platform_oauth_redirect` is retained only for
+  already-published integrations that still use it.
 
 ### 3. Set the secrets
 
@@ -88,7 +97,7 @@ npx wrangler deploy
 Note the deployed URL (e.g. `https://vault-mcp-auth-worker.<account>.workers.dev`,
 or your custom domain).
 
-### 5. Connect Claude
+### 5. Connect Claude or ChatGPT
 
 In Claude → Settings → Connectors → *Add custom connector*, enter the MCP
 endpoint URL:
@@ -101,6 +110,13 @@ Claude discovers the OAuth metadata, registers (or presents a Client ID
 Metadata Document), and sends you to `/authorize`. Verify the client and
 redirect URI shown on the consent page, enter your `CONSENT_PASSWORD`, and
 approve. Repeat per Claude surface if prompted.
+
+For ChatGPT, create the MCP connector/plugin with the same endpoint. Before
+authorizing it, copy the callback URL shown by ChatGPT — typically
+`https://chatgpt.com/connector/oauth/<callback_id>` — into
+`REDIRECT_ALLOWLIST` and redeploy. ChatGPT identifies itself with a Client ID
+Metadata Document such as `https://chatgpt.com/oauth/<callback_id>/client.json`
+and then opens the same `/authorize` consent flow.
 
 ## Security notes
 
@@ -119,6 +135,11 @@ A rogue registration still "succeeds" at `/register`, but its redirect can
 never pass the allowlist, so no consent page is ever rendered for it and no
 grant can ever be completed toward it. Being a single-user system, a fixed
 list costs nothing in flexibility.
+
+For the same reason, do not allow every URL under
+`https://chatgpt.com/connector/oauth/`: use only the callback ID assigned to
+your connector. A different ChatGPT connector receives a different callback
+and must not be authorized implicitly.
 
 ### Consent brute-force limiting
 

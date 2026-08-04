@@ -317,11 +317,21 @@ Edit [apps/auth-worker/wrangler.jsonc](../apps/auth-worker/wrangler.jsonc)
 - the `OAUTH_KV` namespace `id` from the command above;
 - `ORIGIN_URL` — the tunnel hostname, `https://vault.example.com`;
 - `REDIRECT_ALLOWLIST` — comma-separated **exact** `redirect_uri` values the
-  OAuth flow will accept, e.g.
-  `https://claude.ai/api/mcp/auth_callback,https://claude.com/api/mcp/auth_callback`.
+  OAuth flow will accept, e.g. the Claude callbacks plus ChatGPT's exact
+  `https://chatgpt.com/connector/oauth/<callback_id>` callback shown while
+  configuring that connector.
   Anything not exactly on this list is rejected. This is what neutralizes
   rogue dynamic client registrations — see the
   [threat model](threat-model.md).
+
+The ChatGPT callback ID is normally stable for that connector instance, but
+can change if the connector is deleted and recreated or if you create another
+connector. A changed callback causes `403` on `/authorize`; add the new exact
+URL and redeploy. Never use `https://chatgpt.com/connector/oauth/*` as a
+shortcut, because that would authorize callback URLs belonging to other
+ChatGPT connectors. The legacy
+`https://chatgpt.com/connector_platform_oauth_redirect` applies only to
+already-published integrations that still use it.
 
 Then set the secrets and deploy:
 
@@ -368,7 +378,7 @@ systemctl --user start vault-autocommit.timer
 (Units were already *enabled* by bootstrap, so they will also start on every
 boot from now on.)
 
-## 8. Add the connector in Claude
+## 8. Add the connector in Claude or ChatGPT
 
 In Claude's settings, add a custom connector pointing at the Worker's MCP
 endpoint:
@@ -380,6 +390,11 @@ https://<your-worker>.<your-subdomain>.workers.dev/mcp
 (or your custom Worker domain, path `/mcp`). Claude will discover the OAuth
 metadata, send you to the consent page, and ask for the consent password.
 After that, the vault tools are available in any conversation on any device.
+
+In ChatGPT, create the MCP connector/plugin using the same `/mcp` endpoint.
+Copy the callback URL displayed by ChatGPT into `REDIRECT_ALLOWLIST`, deploy
+the Worker, and then start authorization. The callback normally has the form
+`https://chatgpt.com/connector/oauth/<callback_id>`.
 
 Try it: *"search my notes for …"* or *"what did I write in yesterday's daily
 note?"*.

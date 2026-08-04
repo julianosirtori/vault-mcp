@@ -20,7 +20,10 @@ placeholder IDs only), `README.md` (deploy steps). tsconfig is Bundler-mode
   forwarded request. The public URL is NOT a secret; this is.
 - `CONSENT_PASSWORD` (secret) — high-entropy consent credential.
 - `REDIRECT_ALLOWLIST` (var) — comma-separated exact `redirect_uri` values
-  (e.g. `https://claude.ai/api/mcp/auth_callback,https://claude.com/api/mcp/auth_callback`).
+  (e.g. Claude callbacks plus ChatGPT's connector-specific
+  `https://chatgpt.com/connector/oauth/<callback_id>`). ChatGPT's callback ID
+  is normally stable for a connector instance but may change when it is
+  recreated; never replace the exact entry with a wildcard.
 - `COOKIE_SECRET` (secret) — if the library needs one for signed state.
 
 ## Behavior
@@ -45,5 +48,6 @@ placeholder IDs only), `README.md` (deploy steps). tsconfig is Bundler-mode
 ## README.md must cover
 
 create KV namespace, set secrets via `wrangler secret put`, set vars, deploy,
-add the connector URL in Claude settings, and how the allowlist blocks rogue
-dynamic registrations. State plainly what the Worker can and cannot see.
+add the connector URL in Claude or ChatGPT settings, document ChatGPT's exact
+connector callback and its lifecycle, and explain how the allowlist blocks
+rogue dynamic registrations. State plainly what the Worker can and cannot see.
