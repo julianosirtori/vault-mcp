@@ -4,6 +4,9 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
+patchedDependencies:
+  '@cloudflare/workers-oauth-provider@0.10.1': 616c9d0c07ac47f149a7eadeb4b61a7e021045bbd2e8793810d2c88c9e05de02
+
 importers:
 
   .:
@@ -30,8 +33,8 @@ importers:
   apps/auth-worker:
     dependencies:
       '@cloudflare/workers-oauth-provider':
-        specifier: ^0.8.3
-        version: 0.8.3
+        specifier: 0.10.1
+        version: 0.10.1(patch_hash=616c9d0c07ac47f149a7eadeb4b61a7e021045bbd2e8793810d2c88c9e05de02)
     devDependencies:
       '@cloudflare/workers-types':
         specifier: ^5.20260801.1
@@ -67,8 +70,8 @@ importers:
 
 packages:
 
-  '@cloudflare/workers-oauth-provider@0.8.3':
-    resolution: {integrity: sha512-5dIeQlJTDKAQvy3GcrtWBhPvTb9lHeRp/m8MoostTkcrbrGImH8zKSdJhogQ5YSTFUCg+b7FBg38b7KCM/x3VQ==}
+  '@cloudflare/workers-oauth-provider@0.10.1':
+    resolution: {integrity: sha512-F0uoROWOdWYmpUKPXhibX2hs69jBeEvSmBGyy6iwZmjfn+TAU6U9Qk6n2PaEQFsj5UvnoX9cQMqWSZ4MRIXuHQ==}
 
   '@cloudflare/workers-types@5.20260801.1':
     resolution: {integrity: sha512-XCv5xWi47WQOK0LpLa6997Mrpz8Ct+nZmp/M5Xp8Z4BFsarf7nYjkznGOcOoYK5m1GfbMFEEuQ2OIZnbIWoe9A==}
@@ -1275,7 +1278,7 @@ packages:
 
 snapshots:
 
-  '@cloudflare/workers-oauth-provider@0.8.3': {}
+  '@cloudflare/workers-oauth-provider@0.10.1(patch_hash=616c9d0c07ac47f149a7eadeb4b61a7e021045bbd2e8793810d2c88c9e05de02)': {}
 
   '@cloudflare/workers-types@5.20260801.1': {}
 

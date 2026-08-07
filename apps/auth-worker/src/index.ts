@@ -19,7 +19,7 @@
  * Spec-vs-library gaps (documented per SPEC.md):
  *
  * 1. COOKIE_SECRET: the spec lists it "if the library needs one for signed
- *    state". v0.8.3 of the library keeps ALL OAuth state in KV (secrets are
+ *    state". v0.10.1 of the library keeps ALL OAuth state in KV (secrets are
  *    stored only as hashes, props end-to-end encrypted) and never issues
  *    signed cookies, so no such secret exists in its API. The binding is
  *    intentionally omitted.

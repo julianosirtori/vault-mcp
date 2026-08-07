@@ -84,7 +84,7 @@ openssl rand -base64 32   # generate a value, then:
 npx wrangler secret put CONSENT_PASSWORD
 ```
 
-No `COOKIE_SECRET` is needed: library v0.8.3 keeps all OAuth state in KV and
+No `COOKIE_SECRET` is needed: library v0.10.1 keeps all OAuth state in KV and
 issues no signed cookies (documented deviation from SPEC.md, which listed it
 conditionally).
 
@@ -117,6 +117,17 @@ authorizing it, copy the callback URL shown by ChatGPT — typically
 `REDIRECT_ALLOWLIST` and redeploy. ChatGPT identifies itself with a Client ID
 Metadata Document such as `https://chatgpt.com/oauth/<callback_id>/client.json`
 and then opens the same `/authorize` consent flow.
+
+### ChatGPT client-auth compatibility
+
+ChatGPT's Client ID Metadata Document can prefer `private_key_jwt` while also
+listing `none` in `token_endpoint_auth_methods_supported`. The upstream OAuth
+provider does not yet implement `private_key_jwt` for CIMD clients (see
+[cloudflare/workers-oauth-provider#264](https://github.com/cloudflare/workers-oauth-provider/issues/264)).
+This workspace patches v0.10.1 to negotiate `none` only when the client
+explicitly lists it as supported. PKCE S256 remains mandatory, so the
+authorization-code exchange is still bound to ChatGPT's code verifier. Remove
+the patch after upstream supports this metadata shape directly.
 
 ## Security notes
 
