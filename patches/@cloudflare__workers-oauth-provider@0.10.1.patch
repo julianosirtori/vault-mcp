@@ -1,0 +1,8 @@
+--- a/dist/oauth-provider.js
++++ b/dist/oauth-provider.js
+@@ -2615 +2615 @@
+-			const tokenEndpointAuthMethod = declaredAuthMethod ?? (authMethodChoices?.includes("none") ? "none" : void 0);
++			const tokenEndpointAuthMethod = authMethodChoices?.includes("none") ? "none" : declaredAuthMethod;
+@@ -2619 +2619 @@
+-			if (declaredAuthMethod && !OAuthProviderImpl.CIMD_ALLOWED_AUTH_METHODS.includes(declaredAuthMethod) || authMethodChoices && !authMethodChoices.some((method) => OAuthProviderImpl.CIMD_ALLOWED_AUTH_METHODS.includes(method))) throw new Error(`CIMD client does not support an accepted token endpoint authentication method. Supported methods: ${OAuthProviderImpl.CIMD_ALLOWED_AUTH_METHODS.join(", ")}`);
++			if (!tokenEndpointAuthMethod || !OAuthProviderImpl.CIMD_ALLOWED_AUTH_METHODS.includes(tokenEndpointAuthMethod)) throw new Error(`CIMD client does not support an accepted token endpoint authentication method. Supported methods: ${OAuthProviderImpl.CIMD_ALLOWED_AUTH_METHODS.join(", ")}`);

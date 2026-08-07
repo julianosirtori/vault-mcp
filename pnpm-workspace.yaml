@@ -1,3 +1,6 @@
 packages:
   - packages/*
   - apps/*
+
+patchedDependencies:
+  '@cloudflare/workers-oauth-provider@0.10.1': patches/@cloudflare__workers-oauth-provider@0.10.1.patch
