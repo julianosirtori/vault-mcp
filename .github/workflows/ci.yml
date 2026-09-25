@@ -9,11 +9,20 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+# Least privilege: this workflow only reads the repository. Dropping the
+# default token permissions means a compromised step or action cannot use
+# GITHUB_TOKEN to write to the repo, packages or releases.
+permissions:
+  contents: read
+
 jobs:
   ci:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      # Actions are pinned to the full commit SHA the v4 tag points to (not the
+      # floating major tag), so a retagged or compromised upstream ref cannot
+      # run arbitrary code in this workflow.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       # corepack reads the "packageManager" field in package.json and provides
       # the pinned pnpm version; it must be enabled before setup-node so the
@@ -21,7 +30,7 @@ jobs:
       - name: Enable corepack (pnpm)
         run: corepack enable
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
           cache: pnpm

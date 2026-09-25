@@ -1,0 +1,17 @@
+version: 2
+updates:
+  # npm covers the whole pnpm workspace (Dependabot reads pnpm-lock.yaml),
+  # including apps/auth-worker and the patched OAuth provider dependency.
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+
+  # Keeps the commit-pinned actions in .github/workflows current, rewriting
+  # both the SHA and its version comment.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
