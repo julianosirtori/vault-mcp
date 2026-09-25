@@ -1,5 +1,7 @@
 # Setup
 
+> Versão em português: [setup.pt-br.md](setup.pt-br.md).
+
 End-to-end installation for self-hosting your own instance. Written for a
 single user running a single vault — that is the design, not a limitation to
 work around.
@@ -308,11 +310,16 @@ On your own machine (or the VPS — anywhere with wrangler):
 
 ```sh
 cd apps/auth-worker
+cp wrangler.jsonc wrangler.local.jsonc      # git-ignored working copy
 npx wrangler kv namespace create OAUTH_KV
 ```
 
-Edit [apps/auth-worker/wrangler.jsonc](../apps/auth-worker/wrangler.jsonc)
-(it ships with placeholder IDs only):
+Edit `wrangler.local.jsonc` — **not** the tracked
+[apps/auth-worker/wrangler.jsonc](../apps/auth-worker/wrangler.jsonc), which is
+the example and must keep placeholders only. Keeping the real values in the
+untracked copy is what keeps the KV namespace id, the tunnel hostname and the
+ChatGPT callback id out of git history (they are not secrets, but they are
+identifiers this project's policy keeps out of the repository). Fill in:
 
 - the `OAUTH_KV` namespace `id` from the command above;
 - `ORIGIN_URL` — the tunnel hostname, `https://vault.example.com`;
@@ -338,8 +345,11 @@ Then set the secrets and deploy:
 ```sh
 npx wrangler secret put ORIGIN_SECRET      # same value configure generated on the VPS
 npx wrangler secret put CONSENT_PASSWORD   # high entropy, e.g.: openssl rand -base64 24
-npx wrangler deploy
+npx wrangler deploy --config wrangler.local.jsonc
 ```
+
+The `--config` flag points wrangler at the untracked copy; a bare
+`wrangler deploy` would read the tracked example and fail on its placeholders.
 
 `ORIGIN_SECRET` is stored **single-quoted** in `~/.config/vault-mcp/env` —
 that quoting is what lets systemd and bash read the same file. The quotes are

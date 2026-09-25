@@ -43,16 +43,18 @@ globally installed `wrangler`); log in first with `wrangler login`.
 ### 1. Create the KV namespace
 
 ```sh
+cp wrangler.jsonc wrangler.local.jsonc   # git-ignored working copy
 npx wrangler kv namespace create OAUTH_KV
 ```
 
-Copy the printed `id` into `kv_namespaces[0].id` in `wrangler.jsonc`. The
-binding name must stay exactly `OAUTH_KV` — the OAuth library resolves it by
-name.
+Edit the untracked `wrangler.local.jsonc` — never the tracked `wrangler.jsonc`,
+which is the example and must keep placeholders only. Copy the printed `id`
+into `kv_namespaces[0].id` there. The binding name must stay exactly
+`OAUTH_KV` — the OAuth library resolves it by name.
 
 ### 2. Set the vars
 
-Edit `wrangler.jsonc`:
+Edit `wrangler.local.jsonc`:
 
 - `ORIGIN_URL` — the tunnel hostname of your origin, scheme + host only
   (e.g. `https://vault-origin.example.com`). Not a secret.
@@ -91,7 +93,7 @@ conditionally).
 ### 4. Deploy
 
 ```sh
-npx wrangler deploy
+npx wrangler deploy --config wrangler.local.jsonc
 ```
 
 Note the deployed URL (e.g. `https://vault-mcp-auth-worker.<account>.workers.dev`,
