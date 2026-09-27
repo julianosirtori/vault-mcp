@@ -37,8 +37,8 @@ importers:
         version: 0.10.1(patch_hash=616c9d0c07ac47f149a7eadeb4b61a7e021045bbd2e8793810d2c88c9e05de02)
     devDependencies:
       '@cloudflare/workers-types':
-        specifier: ^5.20260801.1
-        version: 5.20260801.1
+        specifier: ^5.20260924.1
+        version: 5.20260924.1
 
   apps/mcp-server:
     dependencies:
@@ -73,8 +73,8 @@ packages:
   '@cloudflare/workers-oauth-provider@0.10.1':
     resolution: {integrity: sha512-F0uoROWOdWYmpUKPXhibX2hs69jBeEvSmBGyy6iwZmjfn+TAU6U9Qk6n2PaEQFsj5UvnoX9cQMqWSZ4MRIXuHQ==}
 
-  '@cloudflare/workers-types@5.20260801.1':
-    resolution: {integrity: sha512-XCv5xWi47WQOK0LpLa6997Mrpz8Ct+nZmp/M5Xp8Z4BFsarf7nYjkznGOcOoYK5m1GfbMFEEuQ2OIZnbIWoe9A==}
+  '@cloudflare/workers-types@5.20260924.1':
+    resolution: {integrity: sha512-puvr63PrfAFIkdh3FInGEgS0VTQ49WYNYDC2Eupd+qvwWwGpSRjxJD5Iz22oNHCmV1UEcsDz+OtGF++01vUloA==}
 
   '@emnapi/core@2.0.0-alpha.3':
     resolution: {integrity: sha512-AZypUeJ/yByuxyS7BlSNRDOMLMlROYtjYdIAuBmJssVz1UJDSeYxLrdizhXCFYhedC5bqd/ASy8EuNXbVVXp9g==}
@@ -572,6 +572,7 @@ packages:
   eslint@9.39.5:
     resolution: {integrity: sha512-DgZS62aPLXKlnxILS/AYCoRvHaZeXceIzlXPkkGGzJWSow1aEk0lbTlxUSlyjC8jcaKxAdOnTDz+o1JFSBsyjw==}
     engines: {node: ^18.18.0 || ^20.9.0 || >=21.1.0}
+    deprecated: This version is no longer supported. Please see https://eslint.org/version-support for other options.
     hasBin: true
     peerDependencies:
       jiti: '*'
@@ -1280,7 +1281,7 @@ snapshots:
 
   '@cloudflare/workers-oauth-provider@0.10.1(patch_hash=616c9d0c07ac47f149a7eadeb4b61a7e021045bbd2e8793810d2c88c9e05de02)': {}
 
-  '@cloudflare/workers-types@5.20260801.1': {}
+  '@cloudflare/workers-types@5.20260924.1': {}
 
   '@emnapi/core@2.0.0-alpha.3':
     dependencies:
