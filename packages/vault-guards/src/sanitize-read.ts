@@ -24,7 +24,7 @@
 import type { ParsedTag, StripCount } from './html.js';
 import {
   decodeEntities,
-  isVoidElement,
+  elementEnd,
   nextTag,
   stripHtmlComments,
   stripObsidianComments,
@@ -55,22 +55,6 @@ function isHiddenTag(tag: ParsedTag): boolean {
     /font-size:0(?![.\d])/.test(style) ||
     /opacity:0(?:\.0+)?(?![.\d])/.test(style)
   );
-}
-
-/** Index just past the element this opening tag starts. */
-function elementEnd(input: string, tag: ParsedTag): number {
-  // Unterminated opening tag: everything after it is inside the tag in a
-  // renderer, so it is hidden too.
-  if (tag.unterminated) return input.length;
-  if (tag.selfClosing || isVoidElement(tag.name)) return tag.end;
-  // Tag names come from the tokenizer: `[a-zA-Z][a-zA-Z0-9:_-]*`, all of
-  // which are literal in a regex. `lastIndex` instead of slicing keeps this
-  // linear on long notes.
-  const closeRe = new RegExp(`</${tag.name}(?:\\s[^>]*)?\\s*>`, 'gi');
-  closeRe.lastIndex = tag.end;
-  const close = closeRe.exec(input);
-  if (!close) return input.length; // never closed: hidden to end of input
-  return close.index + close[0].length;
 }
 
 /**

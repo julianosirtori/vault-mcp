@@ -108,7 +108,8 @@ characters, the Unicode tag block). See the
 Follow [docs/setup.md](docs/setup.md) end to end: VPS bootstrap, sync client,
 tunnel, Worker deploy, and adding the connector in Claude or ChatGPT. There is
 also a local-only mode for trying the server on your own machine without any
-of the edge pieces.
+of the edge pieces. A Portuguese translation lives in
+[docs/setup.pt-br.md](docs/setup.pt-br.md).
 
 Before hosting this, read [docs/threat-model.md](docs/threat-model.md) — you
 are exposing personal notes to the internet, even behind authentication, and
@@ -132,6 +133,7 @@ infra/
   tunnel/           cloudflared configuration example
 docs/
   setup.md          step-by-step installation
+  setup.pt-br.md    same guide in Portuguese
   threat-model.md   assets, adversaries, defenses, residual risk
   operations.md     runbooks: revoke, rotate, restore
 ```

@@ -11,6 +11,8 @@ coverage/
 !.env.example
 *.pem
 *.key
+.dev.vars
+*.local.jsonc
 
 # never commit a vault (the most likely and most expensive mistake)
 vault/

