@@ -326,7 +326,13 @@ function consentPage(options: ConsentPageOptions): Response {
   } catch {
     // Leave empty; the form still posts to 'self'.
   }
-  const formAction = redirectOrigin ? `'self' ${redirectOrigin}` : "'self'";
+  // `https:` is also allowed because clients' callbacks often redirect
+  // again (e.g. www.cursor.com -> 308 -> cursor.com), and Chrome checks
+  // every hop. The page runs no script and escapes all client input, so
+  // form-action is defense in depth here, not the primary control.
+  const formAction = redirectOrigin
+    ? `'self' ${redirectOrigin} https:`
+    : "'self' https:";
 
   const html = `<!doctype html>
 <html lang="en">
