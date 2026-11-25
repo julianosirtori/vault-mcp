@@ -136,7 +136,45 @@ async function handleConsentSubmit(request: Request, env: Env): Promise<Response
     props: { userId: OWNER_USER_ID },
   });
 
-  return Response.redirect(redirectTo, 302);
+  return redirectPage(redirectTo);
+}
+
+/**
+ * Hand the browser back to the client via a 200 page with a meta refresh
+ * instead of a 302. CSP form-action applies to every hop of a redirect that
+ * follows a form POST, and client callbacks commonly bounce on to other
+ * origins or custom schemes (Cursor: www.cursor.com -> cursor.com ->
+ * cursor://...), which a strict form-action would block. A meta-refresh
+ * navigation is not a form submission, so form-action can stay 'self'.
+ */
+function redirectPage(redirectTo: string): Response {
+  const target = escapeHtml(redirectTo);
+  const html = `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="refresh" content="0;url=${target}">
+<title>Redirecting</title>
+<style>:root { color-scheme: light dark; } body { font-family: system-ui, sans-serif; padding: 3rem 1rem; text-align: center; }</style>
+</head>
+<body>
+<p>Access approved. Returning to the app&hellip;</p>
+<p><a href="${target}">Continue</a></p>
+</body>
+</html>
+`;
+  return new Response(html, {
+    status: 200,
+    headers: {
+      'content-type': 'text/html; charset=utf-8',
+      'cache-control': 'no-store',
+      'content-security-policy':
+        "default-src 'none'; style-src 'unsafe-inline'; form-action 'none'; frame-ancestors 'none'; base-uri 'none'",
+      'x-frame-options': 'DENY',
+      'referrer-policy': 'no-referrer',
+    },
+  });
 }
 
 /**
@@ -317,16 +355,6 @@ function consentPage(options: ConsentPageOptions): Response {
     options.errorMessage !== undefined
       ? `<p class="error" role="alert">${escapeHtml(options.errorMessage)}</p>`
       : '';
-  // Chrome enforces form-action against the redirect target of the POST
-  // response, so the (already validated) client redirect origin must be
-  // allowed alongside 'self' or the 302 back to the client is blocked.
-  let redirectOrigin = '';
-  try {
-    redirectOrigin = new URL(options.authRequest.redirectUri).origin;
-  } catch {
-    // Leave empty; the form still posts to 'self'.
-  }
-  const formAction = redirectOrigin ? `'self' ${redirectOrigin}` : "'self'";
 
   const html = `<!doctype html>
 <html lang="en">
@@ -383,10 +411,10 @@ function consentPage(options: ConsentPageOptions): Response {
       'content-type': 'text/html; charset=utf-8',
       'cache-control': 'no-store',
       // The consent page must never be framed (clickjacking) and never
-      // load or send anything anywhere. form-action also covers the 302
-      // back to the client, so its validated redirect origin is allowed.
+      // load or send anything anywhere. The POST answers 200 (see
+      // redirectPage), not a redirect, so form-action can stay 'self'.
       'content-security-policy':
-        `default-src 'none'; style-src 'unsafe-inline'; form-action ${formAction}; frame-ancestors 'none'; base-uri 'none'`,
+        "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
       'x-frame-options': 'DENY',
       'referrer-policy': 'no-referrer',
     },
